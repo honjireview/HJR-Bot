@@ -4,7 +4,7 @@ import os
 import google.generativeai as genai
 import telebot
 from telebot import apihelper
-import psycopg_binary as psycopg
+import psycopg
 
 # Глобальная переменная для хранения соединения с БД
 db_conn = None
