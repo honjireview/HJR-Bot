@@ -45,7 +45,7 @@ def _print_conn_debug_from_dsn(dsn: str):
         print("[DEBUG] Попытка подключения к БД: не удалось разобрать DSN (скрываю детали)")
 
 def _create_table_if_needed(conn: psycopg.Connection):
-    # Создаёт таблицу appeals, если её нет
+    # Создаём базовую таблицу (минимально необходимую схему)
     with conn.cursor() as cur:
         cur.execute("""
                     CREATE TABLE IF NOT EXISTS appeals (
@@ -57,15 +57,18 @@ def _create_table_if_needed(conn: psycopg.Connection):
                                                            council_answers JSONB,
                                                            voters_to_mention TEXT[],
                                                            total_voters INTEGER,
-                                                           status TEXT,
-                                                           expected_responses INTEGER,
-                                                           timer_expires_at TIMESTAMP
+                                                           status TEXT
                     );
                     """)
+        # Добавляем новые поля, если их нет (безошибочно)
+        cur.execute("ALTER TABLE appeals ADD COLUMN IF NOT EXISTS expected_responses INTEGER;")
+        cur.execute("ALTER TABLE appeals ADD COLUMN IF NOT EXISTS timer_expires_at TIMESTAMP;")
     try:
         conn.commit()
     except Exception:
+        # оставляем прежнее поведение — не ломаем запуск, но можно логировать
         pass
+
 
 def check_db_connection() -> bool:
     """
