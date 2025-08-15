@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import os
-import psycopg_binary as psycopg
+import psycopg
 import google.generativeai as genai
 from telebot import apihelper
 

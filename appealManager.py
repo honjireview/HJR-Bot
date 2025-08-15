@@ -4,7 +4,7 @@ import os
 import json
 import random
 import threading
-import psycopg_binary as psycopg
+import psycopg
 import time
 from datetime import datetime, timedelta
 
