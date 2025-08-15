@@ -2,3 +2,5 @@ pyTelegramBotAPI
 google-generativeai
 pandas
 psycopg[binary]
+Flask
+gunicorn
