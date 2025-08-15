@@ -1,0 +1,19 @@
+# Файл конфигурации с секретными ключами
+config.py
+
+# Папки кэша Python
+__pycache__/
+*.pyc
+
+# Папки виртуального окружения
+venv/
+.venv/
+env/
+.env/
+
+# Файлы IDE (PyCharm, VSCode)
+.idea/
+.vscode/
+
+# Файлы операционной системы
+.DS_Store
