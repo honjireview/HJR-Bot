@@ -1,67 +1,39 @@
 # -*- coding: utf-8 -*-
 import os
-import time
 import sys
+import time
+from flask import Flask, request, abort
 import telebot
-from telebot import apihelper
 
-# Импортируем модули проекта (оставьте названия как в вашем проекте)
+# локальные модули проекта
 import botHandlers
 import connectionChecker
 
-# Получаем токен бота из окружения
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
-    raise RuntimeError("Не найден BOT_TOKEN в окружении. Убедитесь, что переменная установлена.")
+    raise RuntimeError("Не найден BOT_TOKEN в окружении.")
 
-# Создаём бота
+WEBHOOK_BASE = os.getenv("WEBHOOK_BASE_URL")  # например https://your-service.up.railway.app
+if not WEBHOOK_BASE:
+    raise RuntimeError("Не найден WEBHOOK_BASE_URL в окружении. Установите публичный URL вашего сервиса.")
+
+WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
+WEBHOOK_URL = WEBHOOK_BASE.rstrip("/") + WEBHOOK_PATH
+
+# создаём бота
 bot = telebot.TeleBot(BOT_TOKEN)
 
-def safe_remove_webhook():
-    """Пытаемся удалить webhook — если он есть, это освобождает возможность polling."""
+app = Flask(__name__)
+
+def setup():
+    # Удалим старый webhook если есть, проверим внешние API и зарегистрируем handlers
     try:
-        print("[INFO] Удаляю webhook (если он установлен)...")
+        print("[INFO] Удаляю старый webhook (если установлен)...")
         bot.remove_webhook()
-        # даём Telegram немного времени, чтобы состояние обновилось
-        time.sleep(0.5)
-        print("[INFO] webhook удалён (или был отсутствующим).")
+        time.sleep(0.3)
     except Exception as e:
-        print(f"[WARN] Ошибка при удалении webhook: {e} — продолжаем запуск.")
+        print(f"[WARN] Ошибка при удалении webhook: {e}")
 
-def start_polling_with_retry():
-    """
-    Запускает polling в цикле. При 409 (conflict — другой getUpdates/webhook) пробует удалить webhook и перезапустить.
-    Этот вариант устойчивее в окружениях, где возможны временные конфликты.
-    """
-    print("[INFO] Запускаю polling с автоматическим ретраем...")
-    while True:
-        try:
-            bot.infinity_polling(timeout=20)
-            # infinity_polling блокирует пока не упадёт; если вышли — делаем паузу и пытаемся снова
-        except apihelper.ApiTelegramException as e:
-            code = getattr(e, "error_code", None)
-            if code == 409 or "Conflict" in str(e):
-                print("[ERROR] 409 Conflict: другой getUpdates/webhook активен. Попытка удалить webhook и перезапустить polling...")
-                try:
-                    bot.remove_webhook()
-                    time.sleep(1.0)
-                except Exception as ex:
-                    print(f"[WARN] Ошибка при удалении webhook: {ex}")
-                time.sleep(2.0)
-                continue
-            else:
-                print(f"[ERROR] ApiTelegramException при polling: {e}")
-                raise
-        except Exception as e:
-            print(f"[ERROR] Неожиданная ошибка polling: {e}; через 2 сек попробуем снова.")
-            time.sleep(2.0)
-            continue
-
-if __name__ == "__main__":
-    # 1) Сначала удалим webhook на всякий случай
-    safe_remove_webhook()
-
-    # 2) Проверяем все внешние API (Telegram, Gemini, PostgreSQL)
     try:
         ok = connectionChecker.check_all_apis(bot)
     except Exception as e:
@@ -69,10 +41,9 @@ if __name__ == "__main__":
         ok = False
 
     if not ok:
-        print("\nБот не может быть запущен из-за ошибок API (смотрите логи выше).")
+        print("[FATAL] Не пройдены проверки API — завершаем.")
         sys.exit(1)
 
-    # 3) Регистрируем обработчики
     try:
         print("[INFO] Регистрирую обработчики...")
         botHandlers.register_handlers(bot)
@@ -81,12 +52,42 @@ if __name__ == "__main__":
         print(f"[FATAL] Не удалось зарегистрировать обработчики: {e}")
         raise
 
-    print("\nОсновной бот запущен и готов к работе.")
-    # 4) Запуск polling с защитой от 409
+    # Устанавливаем webhook на Telegram
     try:
-        start_polling_with_retry()
-    except KeyboardInterrupt:
-        print("[INFO] Остановка по сигналу KeyboardInterrupt.")
+        print(f"[INFO] Устанавливаю webhook: {WEBHOOK_URL}")
+        bot.remove_webhook()
+        time.sleep(0.2)
+        res = bot.set_webhook(url=WEBHOOK_URL)
+        if not res:
+            print("[ERROR] Не удалось установить webhook (bot.set_webhook вернул False).")
+            sys.exit(1)
+        print("[OK] Webhook установлен.")
     except Exception as e:
-        print(f"[FATAL] Bot stopped due to exception: {e}")
+        print(f"[FATAL] Ошибка при установке webhook: {e}")
         raise
+
+@app.route(WEBHOOK_PATH, methods=["POST"])
+def webhook_handler():
+    # Telegram будет POSTить сюда обновления
+    if request.method == "POST":
+        try:
+            json_str = request.get_data().decode("utf-8")
+            update = telebot.types.Update.de_json(json_str)
+            bot.process_new_updates([update])
+            return "", 200
+        except Exception as e:
+            print(f"[ERROR] Ошибка обработки webhook update: {e}")
+            return "", 500
+    else:
+        abort(405)
+
+@app.route("/", methods=["GET"])
+def index():
+    return "ok", 200
+
+if __name__ == "__main__":
+    setup()
+    port = int(os.environ.get("PORT", 8080))
+    # В Railway нужен запуск Flask через порт окружения
+    print(f"[INFO] Запускаем Flask на 0.0.0.0:{port}")
+    app.run(host="0.0.0.0", port=port)
