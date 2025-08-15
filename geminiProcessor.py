@@ -1,16 +1,23 @@
 # -*- coding: utf-8 -*-
 
-import config
+import os
 import google.generativeai as genai
 import appealManager # Импортируем наш менеджер данных
 
-# Настраиваем модель Gemini при загрузке модуля
-try:
-    genai.configure(api_key=config.GEMINI_API_KEY)
-    gemini_model = genai.GenerativeModel('gemini-1.5-flash-latest')
-except Exception as e:
-    print(f"[КРИТИЧЕСКАЯ ОШИБКА] Не удалось настроить Gemini API: {e}")
-    gemini_model = None
+# --- ИЗМЕНЕНИЕ: Получаем ключ напрямую из переменных окружения ---
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
+gemini_model = None
+
+# Настраиваем модель Gemini, если ключ найден
+if GEMINI_API_KEY:
+    try:
+        genai.configure(api_key=GEMINI_API_KEY)
+        gemini_model = genai.GenerativeModel('gemini-1.5-flash-latest')
+    except Exception as e:
+        print(f"[КРИТИЧЕСКАЯ ОШИБКА] Не удалось настроить Gemini API: {e}")
+else:
+    print("[КРИТИЧЕСКАЯ ОШИБКА] Не найден GEMINI_API_KEY. Убедитесь, что переменная окружения установлена.")
+
 
 def read_rules():
     """Читает устав из файла rules.txt."""
