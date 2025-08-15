@@ -4,10 +4,9 @@ import os
 import google.generativeai as genai
 import telebot
 from telebot import apihelper
-import psycopg
+import psycopg_binary as psycopg
 
 # Глобальная переменная для хранения соединения с БД
-# Ее будут использовать другие модули, например appealManager
 db_conn = None
 
 def check_db_connection():
@@ -17,7 +16,6 @@ def check_db_connection():
     """
     global db_conn
     try:
-        # Устанавливаем соединение, используя переменные окружения Railway
         db_conn = psycopg.connect(
             dbname=os.getenv('PGDATABASE'),
             user=os.getenv('PGUSER'),
@@ -25,7 +23,6 @@ def check_db_connection():
             host=os.getenv('PGHOST'),
             port=os.getenv('PGPORT', 5432)
         )
-        # Создаем таблицу, если она не существует
         with db_conn.cursor() as cur:
             cur.execute("""
                         CREATE TABLE IF NOT EXISTS appeals (
@@ -44,7 +41,7 @@ def check_db_connection():
         print("[OK] PostgreSQL: Соединение с базой данных успешно. Таблица 'appeals' проверена.")
         return True
     except Exception as e:
-        print(f"[ОШИБКА] PostgreSQL: Не удалось подключиться к базе данных. Проверьте переменные окружения и статус сервиса. Ошибка: {e}")
+        print(f"[ОШИБКА] PostgreSQL: Не удалось подключиться к базе данных. Ошибка: {e}")
         return False
 
 def check_all_apis(bot):

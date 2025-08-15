@@ -2,7 +2,7 @@
 
 # Этот модуль отвечает за хранение и управление данными апелляций в базе данных.
 
-import psycopg
+import psycopg_binary as psycopg
 import os
 import json
 import threading
