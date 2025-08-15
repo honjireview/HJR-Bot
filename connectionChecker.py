@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import os
-import psycopg
+import psycopg_binary as psycopg
 import google.generativeai as genai
 from telebot import apihelper
 
@@ -24,9 +24,8 @@ def _print_conn_debug_from_dsn(dsn: str):
         info = {}
         # Попытка получить поля через psycopg (если доступно)
         try:
-            info = psycopg.conninfo.parse_dsn(dsn)  # при наличии у psycopg
-        except Exception:
-            # fallback: простая разборка URL, без раскрытия пароля
+            # psycopg.conninfo.parse_dsn не всегда доступен в старых версиях
+            # поэтому используем urllib.parse
             from urllib.parse import urlparse
             p = urlparse(dsn)
             info = {
@@ -35,6 +34,8 @@ def _print_conn_debug_from_dsn(dsn: str):
                 "user": p.username,
                 "dbname": p.path[1:] if p.path else None
             }
+        except Exception:
+            pass # fallback: простая разборка URL
         host = info.get("host") or "socket"
         port = info.get("port") or "5432"
         user = info.get("user") or ""
@@ -56,36 +57,29 @@ def _create_table_if_needed(conn: psycopg.Connection):
                                                            council_answers JSONB,
                                                            voters_to_mention TEXT[],
                                                            total_voters INTEGER,
-                                                           status TEXT
+                                                           status TEXT,
+                                                           expected_responses INTEGER,
+                                                           timer_expires_at TIMESTAMP
                     );
                     """)
-    # commit если нужно (в psycopg3 по умолчанию транзакции; используем commit)
     try:
         conn.commit()
     except Exception:
-        # some managed connections may be in autocommit mode already
         pass
 
 def check_db_connection() -> bool:
     """
     Пытается установить соединение с PostgreSQL.
-    Сначала пробует DATABASE_URL, затем комбинацию PGHOST/PGUSER/PGPASSWORD/PGDATABASE/PGPORT.
     Возвращает True при успешном подключении и создании таблицы, иначе False.
     """
     global db_conn
 
-    # 1) Попытка через DATABASE_URL
     raw_dsn = os.getenv("DATABASE_URL")
     if raw_dsn:
         dsn = _normalize_dsn(raw_dsn)
         _print_conn_debug_from_dsn(dsn)
         try:
-            # если в строке нет sslmode — передаём sslmode='require' (много managed DB требуют SSL)
-            if "sslmode=" not in dsn:
-                db_conn = psycopg.connect(dsn, sslmode="require")
-            else:
-                db_conn = psycopg.connect(dsn)
-            # Установим autocommit, чтобы избежать неожиданных блокировок при ddl
+            db_conn = psycopg.connect(dsn)
             try:
                 db_conn.autocommit = True
             except Exception:
@@ -96,7 +90,6 @@ def check_db_connection() -> bool:
         except Exception as e:
             print(f"[ОШИБКА] PostgreSQL (DATABASE_URL): {e}")
 
-    # 2) Попытка через отдельные переменные окружения
     host = os.getenv("PGHOST")
     user = os.getenv("PGUSER")
     password = os.getenv("PGPASSWORD")
@@ -104,7 +97,7 @@ def check_db_connection() -> bool:
     port = os.getenv("PGPORT", "5432")
 
     if not (host and user and password and dbname):
-        print("[ОШИБКА] PostgreSQL: Нет необходимых PG-переменных окружения (DATABASE_URL или PGHOST/PGUSER/PGPASSWORD/PGDATABASE).")
+        print("[ОШИБКА] PostgreSQL: Нет необходимых PG-переменных окружения.")
         return False
 
     print(f"[DEBUG] Попытка подключения по переменным: host={host} port={port} db={dbname} user={user}")
@@ -135,7 +128,6 @@ def check_all_apis(bot) -> bool:
     """
     print("--- Начало проверки API ---")
 
-    # Telegram
     try:
         bot_info = bot.get_me()
         print(f"[OK] Telegram API: Успешно подключен как @{bot_info.username}")
@@ -151,21 +143,18 @@ def check_all_apis(bot) -> bool:
         print(f"[ОШИБКА] Telegram API: Неизвестная ошибка: {e}")
         return False
 
-    # Gemini (Google generative AI)
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
     if not GEMINI_API_KEY:
         print("[ОШИБКА] Gemini API: Не найден GEMINI_API_KEY.")
         return False
     try:
         genai.configure(api_key=GEMINI_API_KEY)
-        # короткая проверка модели (не грузим большой ответ, просто проверяем доступ)
         genai.get_model("models/gemini-1.5-flash-latest")
         print("[OK] Gemini API: Ключ успешно прошел аутентификацию.")
     except Exception as e:
-        print(f"[ОШИБКА] Gemini API: Не удалось подключиться. Проверьте GEMINI_API_KEY. Детали: {e}")
+        print(f"[ОШИБКА] Gemini API: Не удалось подключиться. Детали: {e}")
         return False
 
-    # PostgreSQL
     if not check_db_connection():
         return False
 

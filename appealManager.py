@@ -4,6 +4,9 @@ import os
 import json
 import random
 import threading
+import psycopg_binary as psycopg
+import time
+from datetime import datetime, timedelta
 
 # используем модуль как namespace, чтобы брать connection динамично
 import connectionChecker
@@ -28,12 +31,15 @@ def create_appeal(case_id, initial_data):
             voters = initial_data.get('voters_to_mention', [])
             answers = json.dumps(initial_data.get('applicant_answers', {}))
             council_answers = json.dumps(initial_data.get('council_answers', []))
+            timer_expires_at = initial_data.get('timer_expires_at')
+            expected_responses = initial_data.get('expected_responses')
 
             cur.execute(
                 """
                 INSERT INTO appeals (case_id, applicant_chat_id, decision_text, applicant_arguments,
-                                     applicant_answers, council_answers, voters_to_mention, total_voters, status)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                     applicant_answers, council_answers, voters_to_mention, total_voters, status,
+                                     expected_responses, timer_expires_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (case_id) DO UPDATE SET
                     applicant_chat_id = EXCLUDED.applicant_chat_id,
                                                  decision_text = EXCLUDED.decision_text,
@@ -41,16 +47,18 @@ def create_appeal(case_id, initial_data):
                                                  council_answers = EXCLUDED.council_answers,
                                                  voters_to_mention = EXCLUDED.voters_to_mention,
                                                  total_voters = EXCLUDED.total_voters,
-                                                 status = EXCLUDED.status;
+                                                 status = EXCLUDED.status,
+                                                 expected_responses = EXCLUDED.expected_responses,
+                                                 timer_expires_at = EXCLUDED.timer_expires_at;
                 """,
                 (case_id, initial_data['applicant_chat_id'], initial_data['decision_text'],
                  initial_data.get('applicant_arguments'), answers, council_answers,
-                 voters, initial_data.get('total_voters'), initial_data['status'])
+                 voters, initial_data.get('total_voters'), initial_data['status'],
+                 expected_responses, timer_expires_at)
             )
         try:
             conn.commit()
         except Exception:
-            # Некоторые managed-conn могут быть в autocommit — игнорируем
             pass
         print(f"Дело #{case_id} успешно создано/обновлено.")
     except RuntimeError as re:
@@ -68,8 +76,16 @@ def get_appeal(case_id):
             if record:
                 columns = [desc[0] for desc in cur.description]
                 appeal_data = dict(zip(columns, record))
-                appeal_data['applicant_answers'] = json.loads(appeal_data.get('applicant_answers', '{}') or '{}')
-                appeal_data['council_answers'] = json.loads(appeal_data.get('council_answers', '[]') or '[]')
+                # Защита от старых данных, которые могут быть не в виде JSON-строки
+                applicant_answers = appeal_data.get('applicant_answers')
+                if not isinstance(applicant_answers, (str, bytes, bytearray)):
+                    applicant_answers = json.dumps(applicant_answers)
+                appeal_data['applicant_answers'] = json.loads(applicant_answers or '{}')
+
+                council_answers = appeal_data.get('council_answers')
+                if not isinstance(council_answers, (str, bytes, bytearray)):
+                    council_answers = json.dumps(council_answers)
+                appeal_data['council_answers'] = json.loads(council_answers or '[]')
                 return appeal_data
     except RuntimeError as re:
         print(f"[ОШИБКА] Получение дела #{case_id} прервано: {re}")
@@ -82,7 +98,7 @@ def update_appeal(case_id, key, value):
     try:
         conn = _get_conn()
         with conn.cursor() as cur:
-            if key == 'applicant_answers' or key == 'council_answers':
+            if key in ['applicant_answers', 'council_answers']:
                 value = json.dumps(value)
             cur.execute(
                 f"UPDATE appeals SET {key} = %s WHERE case_id = %s",
@@ -141,10 +157,16 @@ def get_all_appeals():
     try:
         conn = _get_conn()
         with conn.cursor() as cur:
-            cur.execute("SELECT * FROM appeals")
+            cur.execute("SELECT * FROM appeals WHERE status != 'closed'")
             records = cur.fetchall()
             columns = [desc[0] for desc in cur.description]
-            return [dict(zip(columns, record)) for record in records]
+            result = []
+            for record in records:
+                appeal_data = dict(zip(columns, record))
+                appeal_data['applicant_answers'] = json.loads(appeal_data.get('applicant_answers', '{}') or '{}')
+                appeal_data['council_answers'] = json.loads(appeal_data.get('council_answers', '[]') or '[]')
+                result.append(appeal_data)
+            return result
     except RuntimeError as re:
         print(f"[ОШИБКА] Получение всех дел прервано: {re}")
     except Exception as e:
