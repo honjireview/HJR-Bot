@@ -3,7 +3,6 @@
 import telebot
 from telebot import types
 import random
-import config
 import os
 import pandas as pd
 import io
@@ -12,6 +11,10 @@ import threading
 # Импортируем наши модули
 import appealManager
 import geminiProcessor
+
+# Получаем ID каналов из переменных окружения
+EDITORS_CHANNEL_ID = os.getenv('EDITORS_CHANNEL_ID')
+APPEALS_CHANNEL_ID = os.getenv('APPEALS_CHANNEL_ID')
 
 def register_handlers(bot):
     """
@@ -43,13 +46,13 @@ def register_handlers(bot):
 
         decision_text = ""
         voters_to_mention = []
-        total_voters = None # <-- Для хранения кол-ва проголосовавших
+        total_voters = None
 
         if message.content_type == 'text':
             decision_text = message.text
         elif message.content_type == 'poll':
             poll = message.poll
-            total_voters = poll.total_voter_count # <-- Считываем кол-во проголосовавших
+            total_voters = poll.total_voter_count
             options_text = "\n".join([f"- {opt.text}: {opt.voter_count} голосов" for opt in poll.options])
             decision_text = f"Результаты голосования:\nВопрос: {poll.question}\n---\n{options_text}"
         elif is_document and message.document.mime_type == 'text/csv':
@@ -75,8 +78,8 @@ def register_handlers(bot):
             'voters_to_mention': voters_to_mention,
             'applicant_answers': {},
             'council_answers': [],
-            'total_voters': total_voters, # <-- Сохраняем кол-во
-            'status': 'collecting' # <-- Статус дела
+            'total_voters': total_voters,
+            'status': 'collecting'
         }
         appealManager.create_appeal(case_id, initial_data)
 
@@ -95,7 +98,6 @@ def register_handlers(bot):
         appeal = appealManager.get_appeal(case_id)
         if not appeal: return
 
-        # --- ИЗМЕНЕНИЕ ЗДЕСЬ ---
         if message.text.startswith("Да"):
             expected_responses = appeal['total_voters'] - 1
             appealManager.update_appeal(case_id, 'expected_responses', expected_responses)
@@ -103,14 +105,12 @@ def register_handlers(bot):
             bot.register_next_step_handler(msg, get_applicant_arguments, case_id)
         elif message.text.startswith("Нет"):
             bot.send_message(message.chat.id, "Согласно правилам (п. 7.7 Устава), все участники должны принимать участие в голосовании. Ваша заявка отклонена, так как вы не голосовали.", reply_markup=types.ReplyKeyboardRemove())
-            appealManager.delete_appeal(case_id) # Удаляем дело
+            appealManager.delete_appeal(case_id)
         else:
-            # Если пользователь написал что-то другое
             markup = types.ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
             markup.add(types.KeyboardButton("Да, я голосовал(а)"), types.KeyboardButton("Нет, я не голосовал(а)"))
             msg = bot.send_message(message.chat.id, "Пожалуйста, используйте кнопки для ответа: 'Да' или 'Нет'.", reply_markup=markup)
             bot.register_next_step_handler(msg, handle_applicant_voted_response, case_id)
-
 
     # --- Шаг 3: Сбор аргументов и доп. вопросов ЗАЯВИТЕЛЮ ---
     def get_applicant_arguments(message, case_id):
@@ -158,11 +158,11 @@ def register_handlers(bot):
         else:
             request_text += f"\n\nПрошу Совет предоставить свою позицию по данному решению."
         request_text += f"\n\nУ вас есть 24 часа. Для ответа используйте команду `/ответ {case_id}` в личном чате с ботом."
-        bot.send_message(config.EDITORS_CHANNEL_ID, request_text, parse_mode="Markdown")
+        bot.send_message(EDITORS_CHANNEL_ID, request_text, parse_mode="Markdown")
 
         print(f"Запускаю 24-часовой таймер для дела #{case_id}...")
         timer = threading.Timer(86400, finalize_appeal_after_timeout, [case_id])
-        appealManager.update_appeal(case_id, 'timer', timer) # Сохраняем таймер
+        appealManager.update_appeal(case_id, 'timer', timer)
         timer.start()
 
     # --- Шаг 5: Сбор контраргументов и доп. вопросов СОВЕТУ ---
@@ -204,29 +204,25 @@ def register_handlers(bot):
         appealManager.add_council_answer(case_id, temp_answer)
         bot.send_message(message.chat.id, f"Ваш ответ по делу #{case_id} принят и будет учтен при вынесении вердикта. Спасибо!")
 
-        # --- НОВАЯ ПРОВЕРКА: ЗАВЕРШАЕМ ДОСРОЧНО? ---
         appeal = appealManager.get_appeal(case_id)
         if appeal and appeal.get('expected_responses') is not None:
             if len(appeal['council_answers']) >= appeal['expected_responses']:
                 print(f"Все {appeal['expected_responses']} ответов по делу #{case_id} собраны. Завершаю досрочно.")
-                # Отменяем таймер, чтобы он не сработал второй раз
                 if 'timer' in appeal and appeal['timer']:
                     appeal['timer'].cancel()
-                # Запускаем финальный этап
                 finalize_appeal_after_timeout(case_id)
-
 
     # --- Шаг 6: Финальное рассмотрение (срабатывает по таймеру или досрочно) ---
     def finalize_appeal_after_timeout(case_id):
         appeal = appealManager.get_appeal(case_id)
         if not appeal or appeal.get('status') == 'closed':
-            return # Если дела нет или оно уже закрыто, ничего не делаем
+            return
 
         print(f"Завершаю рассмотрение дела #{case_id}.")
-        appealManager.update_appeal(case_id, 'status', 'closed') # Меняем статус
+        appealManager.update_appeal(case_id, 'status', 'closed')
 
         bot.send_message(appeal['applicant_chat_id'], f"Сбор контраргументов по делу #{case_id} завершен. Дело передано на рассмотрение ИИ-арбитру.")
-        bot.send_message(config.EDITORS_CHANNEL_ID, f"Сбор контраргументов по делу #{case_id} завершен. Дело передано на рассмотрение ИИ-арбитру.")
+        bot.send_message(EDITORS_CHANNEL_ID, f"Сбор контраргументов по делу #{case_id} завершен. Дело передано на рассмотрение ИИ-арбитру.")
 
         ai_verdict = geminiProcessor.get_verdict_from_gemini(case_id)
 
@@ -269,7 +265,7 @@ def register_handlers(bot):
 """
 
         try:
-            bot.send_message(config.APPEALS_CHANNEL_ID, final_report_text, parse_mode="Markdown")
+            bot.send_message(APPEALS_CHANNEL_ID, final_report_text, parse_mode="Markdown")
             bot.send_message(appeal['applicant_chat_id'], "Ваша апелляция рассмотрена. Результат ниже:")
             bot.send_message(appeal['applicant_chat_id'], final_report_text, parse_mode="Markdown")
             print(f"Отчет по делу #{case_id} успешно отправлен.")
