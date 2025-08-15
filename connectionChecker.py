@@ -22,10 +22,7 @@ def _print_conn_debug_from_dsn(dsn: str):
     # Показываем только непарольную диагностическую информацию (host/port/db/user), защищая секреты.
     try:
         info = {}
-        # Попытка получить поля через psycopg (если доступно)
         try:
-            # psycopg.conninfo.parse_dsn не всегда доступен в старых версиях
-            # поэтому используем urllib.parse
             from urllib.parse import urlparse
             p = urlparse(dsn)
             info = {
@@ -35,7 +32,7 @@ def _print_conn_debug_from_dsn(dsn: str):
                 "dbname": p.path[1:] if p.path else None
             }
         except Exception:
-            pass # fallback: простая разборка URL
+            pass
         host = info.get("host") or "socket"
         port = info.get("port") or "5432"
         user = info.get("user") or ""
@@ -45,8 +42,12 @@ def _print_conn_debug_from_dsn(dsn: str):
         print("[DEBUG] Попытка подключения к БД: не удалось разобрать DSN (скрываю детали)")
 
 def _create_table_if_needed(conn: psycopg.Connection):
-    # Создаём базовую таблицу (минимально необходимую схему)
+    """
+    Создаёт таблицу appeals, если её нет, и гарантированно добавляет
+    отсутствующие колонки (миграция при запуске).
+    """
     with conn.cursor() as cur:
+        # Базовая таблица (минимальный набор колонок)
         cur.execute("""
                     CREATE TABLE IF NOT EXISTS appeals (
                                                            case_id INTEGER PRIMARY KEY,
@@ -60,15 +61,16 @@ def _create_table_if_needed(conn: psycopg.Connection):
                                                            status TEXT
                     );
                     """)
-        # Добавляем новые поля, если их нет (безошибочно)
+
+        # Добавляем дополнительные колонки, если они отсутствуют (safe, idempotent)
         cur.execute("ALTER TABLE appeals ADD COLUMN IF NOT EXISTS expected_responses INTEGER;")
         cur.execute("ALTER TABLE appeals ADD COLUMN IF NOT EXISTS timer_expires_at TIMESTAMP;")
+
     try:
         conn.commit()
     except Exception:
-        # оставляем прежнее поведение — не ломаем запуск, но можно логировать
+        # Не ломаем запуск, но можно логировать в будущем
         pass
-
 
 def check_db_connection() -> bool:
     """

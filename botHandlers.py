@@ -7,6 +7,7 @@ import os
 import pandas as pd
 import io
 import threading
+from datetime import datetime, timedelta
 
 # Импортируем наши модули
 import appealManager
@@ -15,6 +16,10 @@ import geminiProcessor
 # Получаем ID каналов из переменных окружения
 EDITORS_CHANNEL_ID = os.getenv('EDITORS_CHANNEL_ID')
 APPEALS_CHANNEL_ID = os.getenv('APPEALS_CHANNEL_ID')
+
+# Словарь в памяти для хранения Timer-объектов (case_id -> threading.Timer)
+# Не сохраняем Timer в БД — нельзя адаптировать этот объект.
+active_timers = {}
 
 def register_handlers(bot):
     """
@@ -40,8 +45,8 @@ def register_handlers(bot):
         is_forwarded = message.forward_from or message.forward_from_chat
         is_document = message.content_type == 'document'
 
-        if not is_forwarded and not is_document:
-            bot.send_message(message.chat.id, "Ошибка: Сообщение не было переслано, и это не документ. Начните заново: /start")
+        if not is_forwarded and not is_document and message.content_type != 'text' and message.content_type != 'poll':
+            bot.send_message(message.chat.id, "Ошибка: Сообщение не было переслано, и это не документ/текст/опрос. Начните заново: /start")
             return
 
         decision_text = ""
@@ -68,8 +73,12 @@ def register_handlers(bot):
                 bot.send_message(message.chat.id, f"Не удалось обработать CSV-файл. Ошибка: {e}. Начните заново: /start")
                 return
         else:
-            bot.send_message(message.chat.id, "Неверный формат. Пожалуйста, перешлите текстовое сообщение, опрос или пришлите CSV-файл. Начните заново: /start")
-            return
+            # если был переслан — часто content_type == 'text' и forward info есть
+            if message.content_type == 'text':
+                decision_text = message.text
+            else:
+                bot.send_message(message.chat.id, "Неверный формат. Пожалуйста, перешлите текстовое сообщение, опрос или пришлите CSV-файл. Начните заново: /start")
+                return
 
         case_id = random.randint(1000, 9999)
         initial_data = {
@@ -79,7 +88,9 @@ def register_handlers(bot):
             'applicant_answers': {},
             'council_answers': [],
             'total_voters': total_voters,
-            'status': 'collecting'
+            'status': 'collecting',
+            'expected_responses': None,
+            'timer_expires_at': None
         }
         appealManager.create_appeal(case_id, initial_data)
 
@@ -150,9 +161,9 @@ def register_handlers(bot):
 `{appeal['decision_text']}`
 
 **Аргументы заявителя:**
-`{appeal['applicant_arguments']}`
+`{appeal.get('applicant_arguments', '')}`
 """
-        if appeal['voters_to_mention']:
+        if appeal.get('voters_to_mention'):
             mentions = " ".join([f"@{str(v).replace('@', '')}" for v in appeal['voters_to_mention']])
             request_text += f"\n\nПрошу следующих участников: {mentions} предоставить свои контраргументы."
         else:
@@ -161,8 +172,12 @@ def register_handlers(bot):
         bot.send_message(EDITORS_CHANNEL_ID, request_text, parse_mode="Markdown")
 
         print(f"Запускаю 24-часовой таймер для дела #{case_id}...")
-        timer = threading.Timer(86400, finalize_appeal_after_timeout, [case_id])
-        appealManager.update_appeal(case_id, 'timer', timer)
+        timeout_seconds = 24 * 3600
+        timer = threading.Timer(timeout_seconds, finalize_appeal_after_timeout, [case_id])
+        expires_at = datetime.utcnow() + timedelta(seconds=timeout_seconds)
+        # сохраняем только время истечения в БД (datetime), а сам Timer держим в памяти
+        appealManager.update_appeal(case_id, 'timer_expires_at', expires_at)
+        active_timers[case_id] = timer
         timer.start()
 
     # --- Шаг 5: Сбор контраргументов и доп. вопросов СОВЕТУ ---
@@ -206,14 +221,22 @@ def register_handlers(bot):
 
         appeal = appealManager.get_appeal(case_id)
         if appeal and appeal.get('expected_responses') is not None:
-            if len(appeal['council_answers']) >= appeal['expected_responses']:
+            if len(appeal.get('council_answers', [])) >= appeal['expected_responses']:
                 print(f"Все {appeal['expected_responses']} ответов по делу #{case_id} собраны. Завершаю досрочно.")
-                if 'timer' in appeal and appeal['timer']:
-                    appeal['timer'].cancel()
+                # отменяем in-memory таймер, если он есть
+                timer_obj = active_timers.pop(case_id, None)
+                if timer_obj:
+                    try:
+                        timer_obj.cancel()
+                    except Exception as ex:
+                        print(f"[WARN] Не удалось отменить таймер для дела #{case_id}: {ex}")
                 finalize_appeal_after_timeout(case_id)
 
     # --- Шаг 6: Финальное рассмотрение (срабатывает по таймеру или досрочно) ---
     def finalize_appeal_after_timeout(case_id):
+        # убрать из памяти (если был)
+        active_timers.pop(case_id, None)
+
         appeal = appealManager.get_appeal(case_id)
         if not appeal or appeal.get('status') == 'closed':
             return
@@ -221,8 +244,11 @@ def register_handlers(bot):
         print(f"Завершаю рассмотрение дела #{case_id}.")
         appealManager.update_appeal(case_id, 'status', 'closed')
 
-        bot.send_message(appeal['applicant_chat_id'], f"Сбор контраргументов по делу #{case_id} завершен. Дело передано на рассмотрение ИИ-арбитру.")
-        bot.send_message(EDITORS_CHANNEL_ID, f"Сбор контраргументов по делу #{case_id} завершен. Дело передано на рассмотрение ИИ-арбитру.")
+        try:
+            bot.send_message(appeal['applicant_chat_id'], f"Сбор контраргументов по делу #{case_id} завершен. Дело передано на рассмотрение ИИ-арбитру.")
+            bot.send_message(EDITORS_CHANNEL_ID, f"Сбор контраргументов по делу #{case_id} завершен. Дело передано на рассмотрение ИИ-арбитру.")
+        except Exception as e:
+            print(f"[WARN] Не удалось уведомить участников о завершении сбора: {e}")
 
         ai_verdict = geminiProcessor.get_verdict_from_gemini(case_id)
 

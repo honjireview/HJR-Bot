@@ -30,37 +30,38 @@ def safe_remove_webhook():
 
 def start_polling_with_retry():
     """
-    Запускает polling. При возникновении 409 (conflict — другой getUpdates/webhook)
-    пробует удалить webhook и запустить polling ещё раз.
+    Запускает polling в цикле. При 409 (conflict — другой getUpdates/webhook) пробует удалить webhook и перезапустить.
+    Этот вариант устойчивее в окружениях, где возможны временные конфликты.
     """
-    try:
-        print("[INFO] Запускаю polling...")
-        bot.polling(non_stop=True)
-    except apihelper.ApiTelegramException as e:
-        code = getattr(e, "error_code", None)
-        if code == 409 or "Conflict" in str(e):
-            print("[ERROR] 409 Conflict: другой getUpdates/webhook активен. Попытка удалить webhook и перезапустить...")
-            try:
-                bot.remove_webhook()
-                time.sleep(0.8)
-                print("[INFO] Повторный запуск polling после удаления webhook...")
-                bot.polling(non_stop=True)
-            except Exception as e2:
-                print(f"[FATAL] Polling не стартует после удаления webhook: {e2}")
+    print("[INFO] Запускаю polling с автоматическим ретраем...")
+    while True:
+        try:
+            bot.infinity_polling(timeout=20)
+            # infinity_polling блокирует пока не упадёт; если вышли — делаем паузу и пытаемся снова
+        except apihelper.ApiTelegramException as e:
+            code = getattr(e, "error_code", None)
+            if code == 409 or "Conflict" in str(e):
+                print("[ERROR] 409 Conflict: другой getUpdates/webhook активен. Попытка удалить webhook и перезапустить polling...")
+                try:
+                    bot.remove_webhook()
+                    time.sleep(1.0)
+                except Exception as ex:
+                    print(f"[WARN] Ошибка при удалении webhook: {ex}")
+                time.sleep(2.0)
+                continue
+            else:
+                print(f"[ERROR] ApiTelegramException при polling: {e}")
                 raise
-        else:
-            print(f"[ERROR] ApiTelegramException при polling: {e}")
-            raise
-    except Exception as e:
-        print(f"[ERROR] Неожиданная ошибка polling: {e}")
-        raise
+        except Exception as e:
+            print(f"[ERROR] Неожиданная ошибка polling: {e}; через 2 сек попробуем снова.")
+            time.sleep(2.0)
+            continue
 
 if __name__ == "__main__":
     # 1) Сначала удалим webhook на всякий случай
     safe_remove_webhook()
 
     # 2) Проверяем все внешние API (Telegram, Gemini, PostgreSQL)
-    #    connectionChecker.check_all_apis(bot) логирует детали
     try:
         ok = connectionChecker.check_all_apis(bot)
     except Exception as e:
@@ -69,10 +70,9 @@ if __name__ == "__main__":
 
     if not ok:
         print("\nБот не может быть запущен из-за ошибок API (смотрите логи выше).")
-        # При ошибке — завершаем процесс с ненулевым кодом, чтобы платформа могла пере деплоить/показать проблему
         sys.exit(1)
 
-    # 3) Регистрируем обработчики (внутри botHandlers.register_handlers используется тот же объект bot)
+    # 3) Регистрируем обработчики
     try:
         print("[INFO] Регистрирую обработчики...")
         botHandlers.register_handlers(bot)
@@ -89,5 +89,4 @@ if __name__ == "__main__":
         print("[INFO] Остановка по сигналу KeyboardInterrupt.")
     except Exception as e:
         print(f"[FATAL] Bot stopped due to exception: {e}")
-        # не скрываем ошибку — выводим в логи и завершаем
         raise
