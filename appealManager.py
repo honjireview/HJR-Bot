@@ -59,10 +59,8 @@ def get_appeal(case_id):
             record = cur.fetchone()
             if record:
                 columns = [desc[0] for desc in cur.description]
-                appeal_data = dict(zip(columns, record))
-                appeal_data['applicant_answers'] = json.loads(appeal_data.get('applicant_answers', '{}') or '{}')
-                appeal_data['council_answers'] = json.loads(appeal_data.get('council_answers', '[]') or '[]')
-                return appeal_data
+                # psycopg уже возвращает dict/list для JSONB, json.loads не нужен
+                return dict(zip(columns, record))
     except Exception as e:
         print(f"[ОШИБКА] Не удалось получить дело #{case_id}: {e}")
     return None
@@ -82,17 +80,14 @@ def update_appeal(case_id, key, value):
         print(f"[ОШИБКА] Не удалось обновить дело #{case_id} (поле {key}): {e}")
 
 def add_council_answer(case_id, answer_data):
-    """Добавляет ответ от редактора в список ответов, используя JSONB."""
+    """Добавляет ответ от редактора в список ответов."""
     try:
-        conn = _get_conn()
-        with conn.cursor() as cur:
-            # Получаем текущие ответы, добавляем новый и обновляем
-            appeal = get_appeal(case_id)
-            if appeal:
-                current_answers = appeal.get('council_answers', [])
-                current_answers.append(answer_data)
-                update_appeal(case_id, 'council_answers', current_answers)
-                print(f"Добавлен ответ от Совета по делу #{case_id}.")
+        appeal = get_appeal(case_id)
+        if appeal:
+            current_answers = appeal.get('council_answers', [])
+            current_answers.append(answer_data)
+            update_appeal(case_id, 'council_answers', current_answers)
+            print(f"Добавлен ответ от Совета по делу #{case_id}.")
     except Exception as e:
         print(f"[ОШИБКА] Не удалось добавить ответ в дело #{case_id}: {e}")
 
@@ -108,7 +103,7 @@ def delete_appeal(case_id):
         print(f"[ОШИБКА] Не удалось удалить дело #{case_id}: {e}")
 
 def get_expired_appeals():
-    """НОВАЯ ФУНКЦИЯ: Возвращает все дела, у которых истек таймер."""
+    """Возвращает все дела, у которых истек таймер."""
     try:
         conn = _get_conn()
         with conn.cursor() as cur:
@@ -118,11 +113,7 @@ def get_expired_appeals():
                 return []
 
             columns = [desc[0] for desc in cur.description]
-            result = [dict(zip(columns, record)) for record in records]
-            for appeal_data in result:
-                appeal_data['applicant_answers'] = json.loads(appeal_data.get('applicant_answers', '{}') or '{}')
-                appeal_data['council_answers'] = json.loads(appeal_data.get('council_answers', '[]') or '[]')
-            return result
+            return [dict(zip(columns, record)) for record in records]
     except Exception as e:
         print(f"[ОШИБКА] Не удалось получить просроченные апелляции: {e}")
     return []
