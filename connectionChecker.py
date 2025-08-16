@@ -8,46 +8,17 @@ from telebot import apihelper
 db_conn = None
 
 def _normalize_dsn(dsn: str) -> str:
-    """
-    Приводит префикс 'postgres://' к 'postgresql://' — иногда нужно для psycopg.
-    Возвращает неизменённый DSN, если изменений не требуется.
-    """
-    if not dsn:
-        return dsn
+    if not dsn: return dsn
     if dsn.startswith("postgres://"):
         return dsn.replace("postgres://", "postgresql://", 1)
     return dsn
 
-def _print_conn_debug_from_dsn(dsn: str):
-    # Показываем только непарольную диагностическую информацию (host/port/db/user), защищая секреты.
-    try:
-        info = {}
-        try:
-            from urllib.parse import urlparse
-            p = urlparse(dsn)
-            info = {
-                "host": p.hostname,
-                "port": p.port,
-                "user": p.username,
-                "dbname": p.path[1:] if p.path else None
-            }
-        except Exception:
-            pass
-        host = info.get("host") or "socket"
-        port = info.get("port") or "5432"
-        user = info.get("user") or ""
-        dbname = info.get("dbname") or ""
-        print(f"[DEBUG] Попытка подключения к БД: host={host} port={port} db={dbname} user={user}")
-    except Exception:
-        print("[DEBUG] Попытка подключения к БД: не удалось разобрать DSN (скрываю детали)")
-
-def _create_table_if_needed(conn: psycopg.Connection):
+def _create_and_migrate_tables(conn: psycopg.Connection):
     """
-    Создаёт таблицу appeals, если её нет, и гарантированно добавляет
-    отсутствующие колонки (миграция при запуске).
+    Создаёт таблицу appeals и добавляет недостающие колонки.
     """
     with conn.cursor() as cur:
-        # Базовая таблица (минимальный набор колонок)
+        # Создаем таблицу, если ее нет
         cur.execute("""
                     CREATE TABLE IF NOT EXISTS appeals (
                                                            case_id INTEGER PRIMARY KEY,
@@ -61,93 +32,46 @@ def _create_table_if_needed(conn: psycopg.Connection):
                                                            status TEXT
                     );
                     """)
-
-        # Добавляем дополнительные колонки, если они отсутствуют (safe, idempotent)
+        # Добавляем колонки, если они отсутствуют (безопасно для повторного запуска)
         cur.execute("ALTER TABLE appeals ADD COLUMN IF NOT EXISTS expected_responses INTEGER;")
-        cur.execute("ALTER TABLE appeals ADD COLUMN IF NOT EXISTS timer_expires_at TIMESTAMP;")
-
-    try:
-        conn.commit()
-    except Exception:
-        # Не ломаем запуск, но можно логировать в будущем
-        pass
+        cur.execute("ALTER TABLE appeals ADD COLUMN IF NOT EXISTS timer_expires_at TIMESTAMPTZ;") # TIMESTAMPTZ для работы с часовыми поясами
+    conn.commit()
+    print("Проверка и миграция таблицы 'appeals' завершена.")
 
 def check_db_connection() -> bool:
     """
-    Пытается установить соединение с PostgreSQL.
-    Возвращает True при успешном подключении и создании таблицы, иначе False.
+    Устанавливает соединение с PostgreSQL и проверяет структуру таблицы.
     """
     global db_conn
-
-    raw_dsn = os.getenv("DATABASE_URL")
-    if raw_dsn:
-        dsn = _normalize_dsn(raw_dsn)
-        _print_conn_debug_from_dsn(dsn)
-        try:
-            db_conn = psycopg.connect(dsn)
-            try:
-                db_conn.autocommit = True
-            except Exception:
-                pass
-            _create_table_if_needed(db_conn)
-            print("[OK] PostgreSQL: Соединение установлено через DATABASE_URL.")
-            return True
-        except Exception as e:
-            print(f"[ОШИБКА] PostgreSQL (DATABASE_URL): {e}")
-
-    host = os.getenv("PGHOST")
-    user = os.getenv("PGUSER")
-    password = os.getenv("PGPASSWORD")
-    dbname = os.getenv("PGDATABASE")
-    port = os.getenv("PGPORT", "5432")
-
-    if not (host and user and password and dbname):
-        print("[ОШИБКА] PostgreSQL: Нет необходимых PG-переменных окружения.")
+    dsn = _normalize_dsn(os.getenv("DATABASE_URL"))
+    if not dsn:
+        print("[ОШИБКА] PostgreSQL: Не найдена переменная окружения DATABASE_URL.")
         return False
-
-    print(f"[DEBUG] Попытка подключения по переменным: host={host} port={port} db={dbname} user={user}")
     try:
-        db_conn = psycopg.connect(
-            host=host,
-            port=port,
-            dbname=dbname,
-            user=user,
-            password=password,
-            sslmode="require"
-        )
-        try:
-            db_conn.autocommit = True
-        except Exception:
-            pass
-        _create_table_if_needed(db_conn)
-        print("[OK] PostgreSQL: Соединение установлено по PGHOST/PGUSER/PGDATABASE.")
+        db_conn = psycopg.connect(dsn)
+        db_conn.autocommit = True # Включаем автокоммит для простоты
+        _create_and_migrate_tables(db_conn)
+        print("[OK] PostgreSQL: Соединение установлено и таблица проверена.")
         return True
     except Exception as e:
-        print(f"[ОШИБКА] PostgreSQL (PGHOST/...): {e}")
+        print(f"[ОШИБКА] PostgreSQL: Не удалось подключиться или настроить таблицу. {e}")
         return False
 
 def check_all_apis(bot) -> bool:
     """
-    Проверяет доступность Telegram API, Gemini API и PostgreSQL.
-    Возвращает True если всё в порядке.
+    Проверяет доступность всех API: Telegram, Gemini и PostgreSQL.
     """
     print("--- Начало проверки API ---")
 
+    # 1. Telegram API
     try:
         bot_info = bot.get_me()
         print(f"[OK] Telegram API: Успешно подключен как @{bot_info.username}")
-    except apihelper.ApiTelegramException as e:
-        if getattr(e, "error_code", None) == 401:
-            print("[ОШИБКА] Telegram API: Неверный токен бота.")
-        else:
-            code = getattr(e, "error_code", "unknown")
-            desc = getattr(e, "description", str(e))
-            print(f"[ОШИБКА] Telegram API: Не удалось подключиться. Код: {code}, Описание: {desc}")
-        return False
     except Exception as e:
-        print(f"[ОШИБКА] Telegram API: Неизвестная ошибка: {e}")
+        print(f"[ОШИБКА] Telegram API: {e}")
         return False
 
+    # 2. Gemini API
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
     if not GEMINI_API_KEY:
         print("[ОШИБКА] Gemini API: Не найден GEMINI_API_KEY.")
@@ -157,9 +81,10 @@ def check_all_apis(bot) -> bool:
         genai.get_model("models/gemini-1.5-flash-latest")
         print("[OK] Gemini API: Ключ успешно прошел аутентификацию.")
     except Exception as e:
-        print(f"[ОШИБКА] Gemini API: Не удалось подключиться. Детали: {e}")
+        print(f"[ОШИБКА] Gemini API: {e}")
         return False
 
+    # 3. PostgreSQL
     if not check_db_connection():
         return False
 
