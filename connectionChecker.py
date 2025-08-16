@@ -18,7 +18,6 @@ def _create_and_migrate_tables(conn: psycopg.Connection):
     Создаёт таблицу appeals и добавляет недостающие колонки.
     """
     with conn.cursor() as cur:
-        # Создаем таблицу, если ее нет
         cur.execute("""
                     CREATE TABLE IF NOT EXISTS appeals (
                                                            case_id INTEGER PRIMARY KEY,
@@ -29,12 +28,13 @@ def _create_and_migrate_tables(conn: psycopg.Connection):
                                                            council_answers JSONB,
                                                            voters_to_mention TEXT[],
                                                            total_voters INTEGER,
-                                                           status TEXT
+                                                           status TEXT,
+                                                           expected_responses INTEGER,
+                                                           timer_expires_at TIMESTAMPTZ
                     );
                     """)
-        # Добавляем колонки, если они отсутствуют (безопасно для повторного запуска)
-        cur.execute("ALTER TABLE appeals ADD COLUMN IF NOT EXISTS expected_responses INTEGER;")
-        cur.execute("ALTER TABLE appeals ADD COLUMN IF NOT EXISTS timer_expires_at TIMESTAMPTZ;") # TIMESTAMPTZ для работы с часовыми поясами
+        # ИЗМЕНЕНИЕ: Добавляем колонку для вердикта ИИ
+        cur.execute("ALTER TABLE appeals ADD COLUMN IF NOT EXISTS ai_verdict TEXT;")
     conn.commit()
     print("Проверка и миграция таблицы 'appeals' завершена.")
 
@@ -48,8 +48,7 @@ def check_db_connection() -> bool:
         print("[ОШИБКА] PostgreSQL: Не найдена переменная окружения DATABASE_URL.")
         return False
     try:
-        db_conn = psycopg.connect(dsn)
-        db_conn.autocommit = True # Включаем автокоммит для простоты
+        db_conn = psycopg.connect(dsn, autocommit=True)
         _create_and_migrate_tables(db_conn)
         print("[OK] PostgreSQL: Соединение установлено и таблица проверена.")
         return True
@@ -63,7 +62,6 @@ def check_all_apis(bot) -> bool:
     """
     print("--- Начало проверки API ---")
 
-    # 1. Telegram API
     try:
         bot_info = bot.get_me()
         print(f"[OK] Telegram API: Успешно подключен как @{bot_info.username}")
@@ -71,7 +69,6 @@ def check_all_apis(bot) -> bool:
         print(f"[ОШИБКА] Telegram API: {e}")
         return False
 
-    # 2. Gemini API
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
     if not GEMINI_API_KEY:
         print("[ОШИБКА] Gemini API: Не найден GEMINI_API_KEY.")
@@ -84,7 +81,6 @@ def check_all_apis(bot) -> bool:
         print(f"[ОШИБКА] Gemini API: {e}")
         return False
 
-    # 3. PostgreSQL
     if not check_db_connection():
         return False
 
