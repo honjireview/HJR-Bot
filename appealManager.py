@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 
+import os
 import json
 import psycopg
 from datetime import datetime
@@ -22,16 +23,30 @@ def create_appeal(case_id, initial_data):
     try:
         conn = _get_conn()
         with conn.cursor() as cur:
+            applicant_answers_json = json.dumps(initial_data.get('applicant_answers', {}))
+            council_answers_json = json.dumps(initial_data.get('council_answers', []))
+
             cur.execute(
                 """
-                INSERT INTO appeals (case_id, applicant_chat_id, decision_text, status, applicant_answers, council_answers, voters_to_mention)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (case_id) DO NOTHING;
+                INSERT INTO appeals (case_id, applicant_chat_id, decision_text, applicant_arguments,
+                                     applicant_answers, council_answers, voters_to_mention, total_voters, status,
+                                     expected_responses, timer_expires_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (case_id) DO UPDATE SET
+                    applicant_chat_id = EXCLUDED.applicant_chat_id, decision_text = EXCLUDED.decision_text,
+                                                 applicant_answers = EXCLUDED.applicant_answers, council_answers = EXCLUDED.council_answers,
+                                                 voters_to_mention = EXCLUDED.voters_to_mention, total_voters = EXCLUDED.total_voters,
+                                                 status = EXCLUDED.status, expected_responses = EXCLUDED.expected_responses,
+                                                 timer_expires_at = EXCLUDED.timer_expires_at;
                 """,
                 (case_id, initial_data['applicant_chat_id'], initial_data['decision_text'],
-                 initial_data['status'], json.dumps({}), json.dumps([]), [])
+                 initial_data.get('applicant_arguments'), applicant_answers_json, council_answers_json,
+                 initial_data.get('voters_to_mention', []), initial_data.get('total_voters'),
+                 initial_data['status'], initial_data.get('expected_responses'),
+                 initial_data.get('timer_expires_at'))
             )
-        print(f"Дело #{case_id} успешно создано.")
+        conn.commit()
+        print(f"Дело #{case_id} успешно создано/обновлено.")
     except Exception as e:
         print(f"[ОШИБКА] Не удалось создать апелляцию #{case_id}: {e}")
 
@@ -44,7 +59,9 @@ def get_appeal(case_id):
             record = cur.fetchone()
             if record:
                 columns = [desc[0] for desc in cur.description]
-                return dict(zip(columns, record))
+                appeal_data = dict(zip(columns, record))
+                # psycopg уже возвращает dict/list для JSONB, json.loads не нужен
+                return appeal_data
     except Exception as e:
         print(f"[ОШИБКА] Не удалось получить дело #{case_id}: {e}")
     return None
@@ -61,6 +78,7 @@ def update_appeal(case_id, key, value):
                 key=psycopg.sql.Identifier(key)
             )
             cur.execute(query, (value, case_id))
+        conn.commit()
     except Exception as e:
         print(f"[ОШИБКА] Не удалось обновить дело #{case_id} (поле {key}): {e}")
 
@@ -82,6 +100,7 @@ def delete_appeal(case_id):
         conn = _get_conn()
         with conn.cursor() as cur:
             cur.execute("DELETE FROM appeals WHERE case_id = %s", (case_id,))
+        conn.commit()
         print(f"Дело #{case_id} успешно удалено.")
     except Exception as e:
         print(f"[ОШИБКА] Не удалось удалить дело #{case_id}: {e}")

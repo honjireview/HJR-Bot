@@ -36,19 +36,7 @@ def register_applicant_handlers(bot, user_states):
         markup.add(done_button)
         bot.send_message(call.message.chat.id, "Пожалуйста, **перешлите** сюда все сообщения, опросы или CSV-файлы, которые вы хотите оспорить. Когда закончите, нажмите 'Готово'.\n\nДля отмены в любой момент введите /cancel", reply_markup=markup)
 
-    # --- Шаг 2: Сбор предметов спора ---
-    @bot.message_handler(func=lambda message: user_states.get(message.from_user.id, {}).get('state') == 'collecting_items', content_types=['text', 'poll', 'document'])
-    def handle_collecting_items(message):
-        user_id = message.from_user.id
-        is_forwarded = message.forward_from or message.forward_from_chat
-        is_document = message.content_type == 'document'
-
-        if not is_forwarded and not is_document:
-            return # Просто игнорируем обычные сообщения на этом этапе
-
-        user_states[user_id]['items'].append(message)
-        bot.send_message(message.chat.id, f"Принято ({len(user_states[user_id]['items'])}). Перешлите еще или нажмите 'Готово'.")
-
+    # --- Шаг 2: Завершение сбора и обработка ---
     @bot.callback_query_handler(func=lambda call: call.data == "done_collecting")
     def handle_done_collecting_callback(call):
         user_id = call.from_user.id
@@ -100,69 +88,17 @@ def register_applicant_handlers(bot, user_states):
         bot.send_message(message.chat.id, f"Все объекты приняты. Вашему делу присвоен номер #{case_id}.")
 
         if poll_count == 1:
+            user_states[user_id]['state'] = 'awaiting_vote_response'
             markup = types.ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
             markup.add(types.KeyboardButton("Да, я голосовал(а)"), types.KeyboardButton("Нет, я не голосовал(а)"))
-            msg = bot.send_message(message.chat.id, "Уточняющий вопрос: вы принимали участие в этом голосовании?", reply_markup=markup)
-            bot.register_next_step_handler(msg, handle_applicant_voted_response, bot, user_states, case_id)
+            bot.send_message(message.chat.id, "Уточняющий вопрос: вы принимали участие в этом голосовании?", reply_markup=markup)
         else:
-            msg = bot.send_message(message.chat.id, "Теперь, пожалуйста, изложите ваши основные аргументы.")
-            bot.register_next_step_handler(msg, get_applicant_arguments, bot, user_states, case_id)
+            user_states[user_id]['state'] = 'awaiting_main_argument'
+            bot.send_message(message.chat.id, "Теперь, пожалуйста, изложите ваши основные аргументы.")
 
-    # --- Шаг 3: Цепочка вопросов заявителю (с использованием register_next_step_handler) ---
-    def handle_applicant_voted_response(message, bot, user_states, case_id):
-        user_id = message.from_user.id
+    def request_counter_arguments(bot, case_id):
         appeal = appealManager.get_appeal(case_id)
         if not appeal: return
-
-        if message.text.startswith("Да"):
-            expected_responses = (appeal.get('total_voters') or 1) - 1
-            appealManager.update_appeal(case_id, 'expected_responses', expected_responses)
-            msg = bot.send_message(message.chat.id, "Понятно. Теперь, пожалуйста, изложите ваши основные аргументы.", reply_markup=types.ReplyKeyboardRemove())
-            bot.register_next_step_handler(msg, get_applicant_arguments, bot, user_states, case_id)
-        elif message.text.startswith("Нет"):
-            bot.send_message(message.chat.id, "Согласно правилам, все участники должны принимать участие в голосовании. Ваша заявка отклонена.", reply_markup=types.ReplyKeyboardRemove())
-            appealManager.delete_appeal(case_id)
-            user_states.pop(user_id, None)
-        else:
-            bot.send_message(message.chat.id, "Пожалуйста, используйте кнопки для ответа.")
-            bot.register_next_step_handler(message, handle_applicant_voted_response, bot, user_states, case_id)
-
-    def get_applicant_arguments(message, bot, user_states, case_id):
-        appealManager.update_appeal(case_id, 'applicant_arguments', message.text)
-        bot.send_message(message.chat.id, "Спасибо. Теперь ответьте, пожалуйста, на несколько уточняющих вопросов.")
-        msg = bot.send_message(message.chat.id, "Вопрос 1/3: Какой конкретно пункт устава, по вашему мнению, был нарушен?")
-        bot.register_next_step_handler(msg, ask_applicant_question_2, bot, user_states, case_id)
-
-    def ask_applicant_question_2(message, bot, user_states, case_id):
-        appeal = appealManager.get_appeal(case_id)
-        if appeal:
-            current_answers = appeal.get('applicant_answers', {}) or {}
-            current_answers['q1'] = message.text
-            appealManager.update_appeal(case_id, 'applicant_answers', current_answers)
-        msg = bot.send_message(message.chat.id, "Вопрос 2/3: Какой результат вы считаете справедливым?")
-        bot.register_next_step_handler(msg, ask_applicant_question_3, bot, user_states, case_id)
-
-    def ask_applicant_question_3(message, bot, user_states, case_id):
-        appeal = appealManager.get_appeal(case_id)
-        if appeal:
-            current_answers = appeal.get('applicant_answers', {}) or {}
-            current_answers['q2'] = message.text
-            appealManager.update_appeal(case_id, 'applicant_answers', current_answers)
-        msg = bot.send_message(message.chat.id, "Вопрос 3/3: Есть ли дополнительный контекст, важный для дела?")
-        bot.register_next_step_handler(msg, request_counter_arguments, bot, user_states, case_id)
-
-    def request_counter_arguments(message, bot, user_states, case_id):
-        user_id = message.from_user.id
-        appeal = appealManager.get_appeal(case_id)
-        if not appeal: return
-
-        current_answers = appeal.get('applicant_answers', {}) or {}
-        current_answers['q3'] = message.text
-        appealManager.update_appeal(case_id, 'applicant_answers', current_answers)
-
-        user_states.pop(user_id, None) # Завершаем диалог с заявителем
-
-        bot.send_message(message.chat.id, "Спасибо! Ваша заявка полностью сформирована и передана в Совет Редакторов. У Совета есть 24 часа на предоставление контраргументов.")
 
         request_text = f"""
 📣 **Запрос контраргументов по апелляции №{case_id}** 📣
@@ -184,3 +120,73 @@ def register_applicant_handlers(bot, user_states):
         expires_at = datetime.utcnow() + timedelta(hours=24)
         appealManager.update_appeal(case_id, 'timer_expires_at', expires_at)
         print(f"Таймер для дела #{case_id} установлен на {expires_at.isoformat()}")
+
+    # ИСПРАВЛЕНО: Единый обработчик для всех состояний диалога
+    @bot.message_handler(func=lambda message: user_states.get(message.from_user.id) is not None, content_types=['text', 'poll', 'document'])
+    def handle_dialogue_messages(message):
+        user_id = message.from_user.id
+        state_data = user_states.get(user_id)
+        if not state_data: return
+
+        state = state_data.get('state')
+        case_id = state_data.get('case_id')
+
+        # --- Логика для сбора пересланных сообщений ---
+        if state == 'collecting_items':
+            is_forwarded = message.forward_from or message.forward_from_chat
+            is_document = message.content_type == 'document'
+            if not is_forwarded and not is_document:
+                # Игнорируем обычные сообщения на этом этапе
+                return
+            state_data['items'].append(message)
+            bot.send_message(message.chat.id, f"Принято ({len(state_data['items'])}). Перешлите еще или нажмите 'Готово'.")
+            return
+
+        # --- Логика для ответов на вопросы ---
+        if state == 'awaiting_vote_response':
+            appeal = appealManager.get_appeal(case_id)
+            if not appeal: return
+            if message.text.startswith("Да"):
+                expected_responses = (appeal.get('total_voters') or 1) - 1
+                appealManager.update_appeal(case_id, 'expected_responses', expected_responses)
+                user_states[user_id]['state'] = 'awaiting_main_argument'
+                bot.send_message(message.chat.id, "Понятно. Теперь, пожалуйста, изложите ваши основные аргументы.", reply_markup=types.ReplyKeyboardRemove())
+            elif message.text.startswith("Нет"):
+                bot.send_message(message.chat.id, "Согласно правилам, все участники должны принимать участие в голосовании. Ваша заявка отклонена.", reply_markup=types.ReplyKeyboardRemove())
+                appealManager.delete_appeal(case_id)
+                user_states.pop(user_id, None)
+            else:
+                bot.send_message(message.chat.id, "Пожалуйста, используйте кнопки для ответа.")
+
+        elif state == 'awaiting_main_argument':
+            appealManager.update_appeal(case_id, 'applicant_arguments', message.text)
+            user_states[user_id]['state'] = 'awaiting_q1'
+            bot.send_message(message.chat.id, "Спасибо. Теперь ответьте, пожалуйста, на несколько уточняющих вопросов.")
+            bot.send_message(message.chat.id, "Вопрос 1/3: Какой конкретно пункт устава, по вашему мнению, был нарушен?")
+
+        elif state == 'awaiting_q1':
+            appeal = appealManager.get_appeal(case_id)
+            if appeal:
+                current_answers = appeal.get('applicant_answers', {}) or {}
+                current_answers['q1'] = message.text
+                appealManager.update_appeal(case_id, 'applicant_answers', current_answers)
+            user_states[user_id]['state'] = 'awaiting_q2'
+            bot.send_message(message.chat.id, "Вопрос 2/3: Какой результат вы считаете справедливым?")
+
+        elif state == 'awaiting_q2':
+            appeal = appealManager.get_appeal(case_id)
+            if appeal:
+                current_answers = appeal.get('applicant_answers', {}) or {}
+                current_answers['q2'] = message.text
+                appealManager.update_appeal(case_id, 'applicant_answers', current_answers)
+            user_states[user_id]['state'] = 'awaiting_q3'
+            bot.send_message(message.chat.id, "Вопрос 3/3: Есть ли дополнительный контекст, важный для дела?")
+
+        elif state == 'awaiting_q3':
+            appeal = appealManager.get_appeal(case_id)
+            if appeal:
+                current_answers = appeal.get('applicant_answers', {}) or {}
+                current_answers['q3'] = message.text
+                appealManager.update_appeal(case_id, 'applicant_answers', current_answers)
+            user_states.pop(user_id, None) # Завершаем диалог с заявителем
+            request_counter_arguments(bot, case_id)
