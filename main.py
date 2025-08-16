@@ -20,15 +20,16 @@ if not TELEGRAM_TOKEN:
 
 # --- Создание экземпляров ---
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
-app = Flask(__name__) # <-- Вот та самая переменная 'app', которую ищет Gunicorn
+app = Flask(__name__)
 
 # --- Импорт модулей ---
 import connectionChecker
-import botHandlers
 import appealManager
+from handlers import register_all_handlers # <-- ИЗМЕНЕНИЕ: Импортируем из нового пакета
+from handlers.council_flow import finalize_appeal # <-- ИЗМЕНЕНИЕ: Импортируем финальную функцию
 
 # --- Регистрация обработчиков ---
-botHandlers.register_handlers(bot)
+register_all_handlers(bot) # <-- ИЗМЕНЕНИЕ: Вызываем новую функцию регистрации
 
 # --- Webhook route и Health Check ---
 @app.post(f"/webhook/{TELEGRAM_TOKEN}")
@@ -76,7 +77,8 @@ def startup_and_timer_tasks():
             for appeal in expired_appeals:
                 case_id = appeal['case_id']
                 log.info(f"Найден просроченный таймер для дела #{case_id}. Запускаю финальное рассмотрение.")
-                botHandlers.finalize_appeal(case_id, bot)
+                # ИЗМЕНЕНИЕ: Вызываем импортированную функцию
+                finalize_appeal(case_id, bot)
         except Exception as e:
             log.error(f"Ошибка в фоновой задаче проверки таймеров: {e}")
 
