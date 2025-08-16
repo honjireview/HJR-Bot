@@ -7,7 +7,6 @@ import os
 import pandas as pd
 import io
 from datetime import datetime, timedelta
-import threading
 
 import appealManager
 from .council_flow import finalize_appeal
@@ -19,6 +18,7 @@ def register_applicant_handlers(bot, user_states):
     Регистрирует обработчики для процесса подачи апелляции.
     """
 
+    # --- Шаг 1: Начало ---
     @bot.message_handler(commands=['start'])
     def send_welcome(message):
         user_states.pop(message.from_user.id, None)
@@ -36,6 +36,7 @@ def register_applicant_handlers(bot, user_states):
         markup.add(done_button)
         bot.send_message(call.message.chat.id, "Пожалуйста, **перешлите** сюда все сообщения, опросы или CSV-файлы, которые вы хотите оспорить. Когда закончите, нажмите 'Готово'.\n\nДля отмены в любой момент введите /cancel", reply_markup=markup)
 
+    # --- Шаг 2: Завершение сбора и обработка ---
     @bot.callback_query_handler(func=lambda call: call.data == "done_collecting")
     def handle_done_collecting_callback(call):
         user_id = call.from_user.id
@@ -120,24 +121,29 @@ def register_applicant_handlers(bot, user_states):
         appealManager.update_appeal(case_id, 'timer_expires_at', expires_at)
         print(f"Таймер для дела #{case_id} установлен на {expires_at.isoformat()}")
 
-    # Единый обработчик для состояний заявителя
-    @bot.message_handler(func=lambda message: user_states.get(message.from_user.id, {}).get('state', '').startswith('awaiting_'))
-    def handle_applicant_dialogue(message):
+    # ИСПРАВЛЕНО: Единый обработчик для всех состояний диалога
+    @bot.message_handler(func=lambda message: user_states.get(message.from_user.id) is not None, content_types=['text', 'poll', 'document'])
+    def handle_dialogue_messages(message):
         user_id = message.from_user.id
-        state_data = user_states[user_id]
+        state_data = user_states.get(user_id)
+        if not state_data: return
+
         state = state_data.get('state')
         case_id = state_data.get('case_id')
 
+        # --- Логика для сбора пересланных сообщений ---
         if state == 'collecting_items':
             is_forwarded = message.forward_from or message.forward_from_chat
             is_document = message.content_type == 'document'
             if not is_forwarded and not is_document:
-                bot.send_message(message.chat.id, "Ошибка: Сообщение не было переслано. Пожалуйста, **перешлите** оригинальное сообщение.")
+                # Игнорируем обычные сообщения на этом этапе
                 return
             state_data['items'].append(message)
             bot.send_message(message.chat.id, f"Принято ({len(state_data['items'])}). Перешлите еще или нажмите 'Готово'.")
+            return
 
-        elif state == 'awaiting_vote_response':
+        # --- Логика для ответов на вопросы ---
+        if state == 'awaiting_vote_response':
             appeal = appealManager.get_appeal(case_id)
             if not appeal: return
             if message.text.startswith("Да"):
