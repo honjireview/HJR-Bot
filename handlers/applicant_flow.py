@@ -122,7 +122,13 @@ def register_applicant_handlers(bot, user_states):
         print(f"Таймер для дела #{case_id} установлен на {expires_at.isoformat()}")
 
     # ИСПРАВЛЕНО: Единый обработчик для всех состояний диалога
-    @bot.message_handler(func=lambda message: user_states.get(message.from_user.id) is not None, content_types=['text', 'poll', 'document'])
+    @bot.message_handler(
+        func=lambda message: (
+            user_states.get(message.from_user.id) is not None
+            and not str(user_states.get(message.from_user.id, {}).get('state', '')).startswith('awaiting_council_')
+        ),
+        content_types=['text', 'poll', 'document']
+    )
     def handle_dialogue_messages(message):
         user_id = message.from_user.id
         state_data = user_states.get(user_id)
@@ -135,7 +141,8 @@ def register_applicant_handlers(bot, user_states):
         if state == 'collecting_items':
             is_forwarded = message.forward_from or message.forward_from_chat
             is_document = message.content_type == 'document'
-            if not is_forwarded and not is_document:
+            is_poll = message.content_type == 'poll'
+            if not is_forwarded and not is_document and not is_poll:
                 # Игнорируем обычные сообщения на этом этапе
                 return
             state_data['items'].append(message)
