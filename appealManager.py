@@ -1,95 +1,128 @@
 # -*- coding: utf-8 -*-
 
 import os
-import time
-import logging
-from threading import Thread
-from flask import Flask, request, abort
-import telebot
+import json
+import psycopg
+from datetime import datetime
 
-# Настройка логирования
-logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
-log = logging.getLogger("hjr-bot")
-
-# --- Переменные окружения ---
-# Railway предоставляет их автоматически
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-WEBHOOK_BASE_URL = os.getenv("WEBHOOK_BASE_URL")
-
-if not TELEGRAM_TOKEN:
-    raise RuntimeError("Не найден TELEGRAM_TOKEN в окружении.")
-
-# --- Создание экземпляров ---
-bot = telebot.TeleBot(TELEGRAM_TOKEN)
-app = Flask(__name__)
-
-# --- Импорт модулей после создания bot ---
-# Это гарантирует, что у них будет доступ к нашему экземпляру bot
 import connectionChecker
-import botHandlers
-import appealManager
 
-# --- Регистрация обработчиков ---
-botHandlers.register_handlers(bot)
-
-# --- Webhook route для Telegram ---
-@app.post(f"/webhook/{TELEGRAM_TOKEN}")
-def telegram_webhook():
-    if request.headers.get("content-type") == "application/json":
-        update = telebot.types.Update.de_json(request.get_data().decode('utf-8'))
-        bot.process_new_updates([update])
-        return "ok", 200
-    abort(400)
-
-# --- Health check для Railway ---
-@app.get("/")
-def health_check():
-    return "Bot is running.", 200
-
-# --- Фоновая задача для проверки таймеров ---
-def check_expired_appeals_periodically():
-    """
-    Бесконечный цикл, который раз в 60 секунд проверяет БД на просроченные апелляции.
-    """
-    while True:
-        try:
-            # Получаем все дела, у которых истек таймер и статус еще не 'closed'
-            appeals_to_finalize = appealManager.get_expired_appeals()
-            for appeal in appeals_to_finalize:
-                case_id = appeal['case_id']
-                print(f"Найден просроченный таймер для дела #{case_id}. Запускаю финальное рассмотрение.")
-                # Вызываем финальную функцию из botHandlers
-                botHandlers.finalize_appeal(case_id, bot)
-        except Exception as e:
-            log.error(f"Ошибка в фоновой задаче проверки таймеров: {e}")
-
-        # Пауза на 60 секунд перед следующей проверкой
-        time.sleep(60)
-
-# --- Запуск ---
-if __name__ == "__main__":
-    log.info("Проверка API и подключений...")
-    if connectionChecker.check_all_apis(bot):
-        log.info("Все проверки пройдены.")
-
-        # Установка Webhook
-        if WEBHOOK_BASE_URL:
-            webhook_url = f"{WEBHOOK_BASE_URL.strip('/')}/webhook/{TELEGRAM_TOKEN}"
-            log.info(f"Установка webhook на: {webhook_url}")
-            bot.remove_webhook()
-            time.sleep(0.5)
-            bot.set_webhook(url=webhook_url)
-            log.info("Webhook успешно установлен.")
+def _get_conn():
+    """Возвращает текущее соединение из connectionChecker."""
+    conn = connectionChecker.db_conn
+    if conn is None or conn.closed:
+        print("Соединение с БД потеряно. Попытка переподключения...")
+        if connectionChecker.check_db_connection():
+            conn = connectionChecker.db_conn
         else:
-            log.warning("WEBHOOK_BASE_URL не задан. Webhook не будет установлен.")
+            raise RuntimeError("Не удалось восстановить соединение с БД.")
+    return conn
 
-        # Запуск фоновой задачи для таймеров в отдельном потоке
-        timer_thread = Thread(target=check_expired_appeals_periodically, daemon=True)
-        timer_thread.start()
-        log.info("Фоновая задача для проверки таймеров запущена.")
+def create_appeal(case_id, initial_data):
+    """Создаёт новую запись об апелляции в БД."""
+    try:
+        conn = _get_conn()
+        with conn.cursor() as cur:
+            applicant_answers_json = json.dumps(initial_data.get('applicant_answers', {}))
+            council_answers_json = json.dumps(initial_data.get('council_answers', []))
 
-        # Этот код больше не нужен, так как Railway использует Procfile
-        # port = int(os.getenv("PORT", "8080"))
-        # app.run(host="0.0.0.0", port=port)
-    else:
-        log.error("Бот не может быть запущен из-за ошибок API.")
+            cur.execute(
+                """
+                INSERT INTO appeals (case_id, applicant_chat_id, decision_text, applicant_arguments,
+                                     applicant_answers, council_answers, voters_to_mention, total_voters, status,
+                                     expected_responses, timer_expires_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (case_id) DO UPDATE SET
+                    applicant_chat_id = EXCLUDED.applicant_chat_id, decision_text = EXCLUDED.decision_text,
+                                                 applicant_answers = EXCLUDED.applicant_answers, council_answers = EXCLUDED.council_answers,
+                                                 voters_to_mention = EXCLUDED.voters_to_mention, total_voters = EXCLUDED.total_voters,
+                                                 status = EXCLUDED.status, expected_responses = EXCLUDED.expected_responses,
+                                                 timer_expires_at = EXCLUDED.timer_expires_at;
+                """,
+                (case_id, initial_data['applicant_chat_id'], initial_data['decision_text'],
+                 initial_data.get('applicant_arguments'), applicant_answers_json, council_answers_json,
+                 initial_data.get('voters_to_mention', []), initial_data.get('total_voters'),
+                 initial_data['status'], initial_data.get('expected_responses'),
+                 initial_data.get('timer_expires_at'))
+            )
+        conn.commit()
+        print(f"Дело #{case_id} успешно создано/обновлено.")
+    except Exception as e:
+        print(f"[ОШИБКА] Не удалось создать апелляцию #{case_id}: {e}")
+
+def get_appeal(case_id):
+    """Возвращает данные по конкретному делу из БД."""
+    try:
+        conn = _get_conn()
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM appeals WHERE case_id = %s", (case_id,))
+            record = cur.fetchone()
+            if record:
+                columns = [desc[0] for desc in cur.description]
+                appeal_data = dict(zip(columns, record))
+                appeal_data['applicant_answers'] = json.loads(appeal_data.get('applicant_answers', '{}') or '{}')
+                appeal_data['council_answers'] = json.loads(appeal_data.get('council_answers', '[]') or '[]')
+                return appeal_data
+    except Exception as e:
+        print(f"[ОШИБКА] Не удалось получить дело #{case_id}: {e}")
+    return None
+
+def update_appeal(case_id, key, value):
+    """Обновляет одно поле в существующей апелляции в БД."""
+    try:
+        conn = _get_conn()
+        with conn.cursor() as cur:
+            if isinstance(value, (dict, list)):
+                value = json.dumps(value)
+
+            query = f"UPDATE appeals SET {psycopg.sql.Identifier(key).as_string(conn)} = %s WHERE case_id = %s"
+            cur.execute(query, (value, case_id))
+        conn.commit()
+    except Exception as e:
+        print(f"[ОШИБКА] Не удалось обновить дело #{case_id} (поле {key}): {e}")
+
+def add_council_answer(case_id, answer_data):
+    """Добавляет ответ от редактора в список ответов, используя JSONB."""
+    try:
+        conn = _get_conn()
+        with conn.cursor() as cur:
+            # Получаем текущие ответы, добавляем новый и обновляем
+            appeal = get_appeal(case_id)
+            if appeal:
+                current_answers = appeal.get('council_answers', [])
+                current_answers.append(answer_data)
+                update_appeal(case_id, 'council_answers', current_answers)
+                print(f"Добавлен ответ от Совета по делу #{case_id}.")
+    except Exception as e:
+        print(f"[ОШИБКА] Не удалось добавить ответ в дело #{case_id}: {e}")
+
+def delete_appeal(case_id):
+    """Удаляет дело из БД."""
+    try:
+        conn = _get_conn()
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM appeals WHERE case_id = %s", (case_id,))
+        conn.commit()
+        print(f"Дело #{case_id} успешно закрыто и удалено.")
+    except Exception as e:
+        print(f"[ОШИБКА] Не удалось удалить дело #{case_id}: {e}")
+
+def get_expired_appeals():
+    """НОВАЯ ФУНКЦИЯ: Возвращает все дела, у которых истек таймер."""
+    try:
+        conn = _get_conn()
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM appeals WHERE status = 'collecting' AND timer_expires_at IS NOT NULL AND timer_expires_at < %s", (datetime.utcnow(),))
+            records = cur.fetchall()
+            if not records:
+                return []
+
+            columns = [desc[0] for desc in cur.description]
+            result = [dict(zip(columns, record)) for record in records]
+            for appeal_data in result:
+                appeal_data['applicant_answers'] = json.loads(appeal_data.get('applicant_answers', '{}') or '{}')
+                appeal_data['council_answers'] = json.loads(appeal_data.get('council_answers', '[]') or '[]')
+            return result
+    except Exception as e:
+        print(f"[ОШИБКА] Не удалось получить просроченные апелляции: {e}")
+    return []

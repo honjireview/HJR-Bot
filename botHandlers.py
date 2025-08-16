@@ -43,9 +43,7 @@ def register_handlers(bot):
             bot.send_message(message.chat.id, "Ошибка: Сообщение не было переслано, и это не документ. Начните заново: /start")
             return
 
-        decision_text = ""
-        voters_to_mention = []
-        total_voters = None
+        decision_text, voters_to_mention, total_voters = "", [], None
 
         if message.content_type == 'text':
             decision_text = message.text
@@ -61,8 +59,7 @@ def register_handlers(bot):
                 df = pd.read_csv(io.BytesIO(downloaded_file))
                 decision_text = "Данные из Google Forms (CSV):\n---\n" + df.to_markdown(index=False)
                 mention_col = 'Username' if 'Username' in df.columns else 'UserID' if 'UserID' in df.columns else None
-                if mention_col:
-                    voters_to_mention = df[mention_col].dropna().tolist()
+                if mention_col: voters_to_mention = df[mention_col].dropna().tolist()
             except Exception as e:
                 bot.send_message(message.chat.id, f"Не удалось обработать CSV-файл. Ошибка: {e}. Начните заново: /start")
                 return
@@ -70,18 +67,13 @@ def register_handlers(bot):
             bot.send_message(message.chat.id, "Неверный формат. Пожалуйста, перешлите текстовое сообщение, опрос или пришлите CSV-файл. Начните заново: /start")
             return
 
-        case_id = random.randint(1000, 9999)
+        case_id = random.randint(10000, 99999)
         initial_data = {
-            'applicant_chat_id': message.chat.id,
-            'decision_text': decision_text,
-            'voters_to_mention': voters_to_mention,
-            'applicant_answers': {},
-            'council_answers': [],
-            'total_voters': total_voters,
-            'status': 'collecting'
+            'applicant_chat_id': message.chat.id, 'decision_text': decision_text,
+            'voters_to_mention': voters_to_mention, 'applicant_answers': {},
+            'council_answers': [], 'total_voters': total_voters, 'status': 'collecting'
         }
         appealManager.create_appeal(case_id, initial_data)
-
         bot.send_message(message.chat.id, f"Принято. Вашему делу присвоен номер #{case_id}.")
 
         if total_voters is not None:
@@ -144,7 +136,7 @@ def register_handlers(bot):
 
         bot.send_message(message.chat.id, "Спасибо! Ваша заявка полностью сформирована и передана в Совет Редакторов. У Совета есть 24 часа на предоставление контраргументов.")
 
-        request_text = f"📣 **Запрос контраргументов по апелляции №{case_id}** 📣\n\n..." # (Текст запроса как раньше)
+        request_text = f"📣 **Запрос контраргументов по апелляции №{case_id}** 📣\n\n..." # (Текст как раньше)
         bot.send_message(EDITORS_CHANNEL_ID, request_text, parse_mode="Markdown")
 
         # Устанавливаем время истечения таймера в БД
@@ -154,8 +146,37 @@ def register_handlers(bot):
 
     @bot.message_handler(commands=['ответ'])
     def handle_counter_argument_command(message):
-        # ... (логика приема ответа как раньше) ...
-        pass
+        try:
+            parts = message.text.split()
+            case_id = int(parts[1])
+            if not appealManager.get_appeal(case_id):
+                bot.send_message(message.chat.id, f"Дело с номером {case_id} не найдено или уже закрыто.")
+                return
+
+            user_id = message.from_user.id
+            # Проверяем, не отвечал ли этот редактор уже
+            current_answers = appealManager.get_appeal(case_id).get('council_answers', [])
+            if any(answer['user_id'] == user_id for answer in current_answers):
+                bot.send_message(message.chat.id, "Вы уже предоставили ответ по этому делу.")
+                return
+
+            msg = bot.send_message(message.chat.id, f"Изложите, пожалуйста, основные контраргументы Совета по делу #{case_id}.")
+            bot.register_next_step_handler(msg, ask_council_question_1, case_id, message.from_user)
+        except (ValueError, IndexError):
+            bot.send_message(message.chat.id, "Неверный формат. Используйте: /ответ [номер_дела]")
+
+    def ask_council_question_1(message, case_id, user):
+        temp_answer = {
+            'user_id': user.id, 'responder_info': f"Ответ от {user.first_name} (@{user.username})",
+            'main_arg': message.text
+        }
+        msg = bot.send_message(message.chat.id, "Вопрос 1/2: На каких пунктах устава основывалась позиция Совета?")
+        bot.register_next_step_handler(msg, ask_council_question_2, case_id, temp_answer)
+
+    def ask_council_question_2(message, case_id, temp_answer):
+        temp_answer['q1'] = message.text
+        msg = bot.send_message(message.chat.id, "Вопрос 2/2: Какие аргументы заявителя вы считаете несостоятельными и почему?")
+        bot.register_next_step_handler(msg, save_council_answers, case_id, temp_answer)
 
     def save_council_answers(message, case_id, temp_answer):
         temp_answer['q2'] = message.text
@@ -168,11 +189,8 @@ def register_handlers(bot):
                 print(f"Все ответы по делу #{case_id} собраны. Завершаю досрочно.")
                 finalize_appeal(case_id, bot)
 
+# --- Глобальная функция для финальной стадии ---
 def finalize_appeal(case_id, bot):
-    """
-    Финальная стадия: отправка к ИИ и рассылка вердикта.
-    Вызывается либо по таймеру, либо досрочно.
-    """
     appeal = appealManager.get_appeal(case_id)
     if not appeal or appeal.get('status') == 'closed':
         return
