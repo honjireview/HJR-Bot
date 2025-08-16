@@ -2,9 +2,13 @@
 
 import telebot
 from telebot import types
+import os
 import appealManager
 import geminiProcessor
-import config
+
+# ИЗМЕНЕНИЕ: Получаем ID каналов напрямую из переменных окружения
+EDITORS_CHANNEL_ID = os.getenv('EDITORS_CHANNEL_ID')
+APPEALS_CHANNEL_ID = os.getenv('APPEALS_CHANNEL_ID')
 
 def finalize_appeal(case_id, bot):
     appeal = appealManager.get_appeal(case_id)
@@ -21,7 +25,7 @@ def finalize_appeal(case_id, bot):
     final_report_text = f"⚖️ **Рассмотрение апелляции №{case_id}** ⚖️\n\n..."
 
     try:
-        bot.send_message(config.APPEALS_CHANNEL_ID, final_report_text, parse_mode="Markdown")
+        bot.send_message(APPEALS_CHANNEL_ID, final_report_text, parse_mode="Markdown")
         bot.send_message(appeal['applicant_chat_id'], "Ваша апелляция рассмотрена. Результат ниже:")
         bot.send_message(appeal['applicant_chat_id'], final_report_text, parse_mode="Markdown")
         print(f"Отчет по делу #{case_id} успешно отправлен.")
@@ -53,4 +57,4 @@ def register_council_handlers(bot, user_states):
         except (ValueError, IndexError):
             bot.send_message(message.chat.id, "Неверный формат. Используйте: /reply [номер_дела]")
 
-    # ... (здесь будет единый обработчик для состояний редакторов, аналогично applicant_flow)
+    # ... (здесь будет единый обработчик для состояний редакторов)

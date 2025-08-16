@@ -10,7 +10,10 @@ from datetime import datetime, timedelta
 import threading
 
 import appealManager
-import config # Используем для ID каналов
+from .council_flow import finalize_appeal # Локальный импорт для избежания цикла
+
+# ИЗМЕНЕНИЕ: Получаем ID канала напрямую из переменных окружения
+EDITORS_CHANNEL_ID = os.getenv('EDITORS_CHANNEL_ID')
 
 def register_applicant_handlers(bot, user_states):
     """
@@ -42,9 +45,9 @@ def register_applicant_handlers(bot, user_states):
             bot.answer_callback_query(call.id, "Вы ничего не отправили.", show_alert=True)
             return
         bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
-        process_collected_items(bot, call.message)
+        process_collected_items(bot, call.message, user_states)
 
-    def process_collected_items(bot, message):
+    def process_collected_items(bot, message, user_states):
         user_id = message.chat.id
         state_data = user_states.get(user_id)
         if not state_data: return
@@ -57,7 +60,18 @@ def register_applicant_handlers(bot, user_states):
                 total_voters = poll.total_voter_count
                 options_text = "\n".join([f"- {opt.text}: {opt.voter_count} голосов" for opt in poll.options])
                 full_decision_text += f"\n\n--- Опрос ---\nВопрос: {poll.question}\n{options_text}"
-            # ... (другие типы)
+            elif item.content_type == 'text':
+                full_decision_text += f"\n\n--- Сообщение ---\n{item.text}"
+            elif item.content_type == 'document' and item.document.mime_type == 'text/csv':
+                try:
+                    file_info = bot.get_file(item.document.file_id)
+                    downloaded_file = bot.download_file(file_info.file_path)
+                    df = pd.read_csv(io.BytesIO(downloaded_file))
+                    full_decision_text += "\n\n--- Данные из Google Forms (CSV) ---\n" + df.to_markdown(index=False)
+                    mention_col = 'Username' if 'Username' in df.columns else 'UserID' if 'UserID' in df.columns else None
+                    if mention_col: all_voters_to_mention.extend(df[mention_col].dropna().tolist())
+                except Exception as e:
+                    bot.send_message(message.chat.id, f"Ошибка обработки CSV: {e}. Этот файл будет проигнорирован.")
 
         if poll_count > 1:
             bot.send_message(message.chat.id, "Ошибка: Вы можете оспорить только одно голосование за раз. Начните заново: /start")
@@ -83,13 +97,12 @@ def register_applicant_handlers(bot, user_states):
             bot.send_message(message.chat.id, "Теперь, пожалуйста, изложите ваши основные аргументы.")
 
     def request_counter_arguments(bot, case_id):
-        from .council_flow import finalize_appeal # Локальный импорт для избежания цикла
         appeal = appealManager.get_appeal(case_id)
         if not appeal: return
 
         request_text = f"📣 **Запрос контраргументов по апелляции №{case_id}** 📣\n\n..." # Текст как раньше
-        bot.send_message(config.EDITORS_CHANNEL_ID, request_text, parse_mode="Markdown")
+        bot.send_message(EDITORS_CHANNEL_ID, request_text, parse_mode="Markdown")
 
-        print(f"Запускаю 24-часовой таймер для дела #{case_id}...")
-        timer = threading.Timer(86400, finalize_appeal, [case_id, bot])
-        timer.start()
+        expires_at = datetime.utcnow() + timedelta(hours=24)
+        appealManager.update_appeal(case_id, 'timer_expires_at', expires_at)
+        print(f"Таймер для дела #{case_id} установлен на {expires_at.isoformat()}")
