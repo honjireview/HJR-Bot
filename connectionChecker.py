@@ -18,6 +18,7 @@ def _create_and_migrate_tables(conn: psycopg.Connection):
     Создаёт таблицу appeals и добавляет недостающие колонки.
     """
     with conn.cursor() as cur:
+        # Создаем таблицу, если ее нет
         cur.execute("""
                     CREATE TABLE IF NOT EXISTS appeals (
                                                            case_id INTEGER PRIMARY KEY,
@@ -30,11 +31,10 @@ def _create_and_migrate_tables(conn: psycopg.Connection):
                                                            total_voters INTEGER,
                                                            status TEXT,
                                                            expected_responses INTEGER,
-                                                           timer_expires_at TIMESTAMPTZ
+                                                           timer_expires_at TIMESTAMPTZ,
+                                                           ai_verdict TEXT
                     );
                     """)
-        # ИЗМЕНЕНИЕ: Добавляем колонку для вердикта ИИ
-        cur.execute("ALTER TABLE appeals ADD COLUMN IF NOT EXISTS ai_verdict TEXT;")
     conn.commit()
     print("Проверка и миграция таблицы 'appeals' завершена.")
 
