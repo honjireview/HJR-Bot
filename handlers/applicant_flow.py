@@ -7,18 +7,15 @@ import os
 import pandas as pd
 import io
 import re
-import logging
 from datetime import datetime, timedelta
 
 import appealManager
 from .council_flow import finalize_appeal
 
-# Railway の環境変数: プライベートグループ（評議会）の chat_id（例: -100xxxxxxxxxx）
+# Railway の環境変数に保存されているプライベートグループ（評議会）の chat_id
 EDITORS_CHANNEL_ID = os.getenv('EDITORS_CHANNEL_ID')
-# 検証対象のチャットIDは EDITORS_CHANNEL_ID を使用
+# 検証対象のチャットIDは EDITORS_CHANNEL_ID を使用します（リンク検証・真正性確認に利用）
 COUNCIL_CHAT_ID = EDITORS_CHANNEL_ID
-
-log = logging.getLogger("hjr-bot")
 
 def register_applicant_handlers(bot, user_states):
     """
@@ -27,39 +24,24 @@ def register_applicant_handlers(bot, user_states):
 
     # --- ヘルパ: メッセージリンクを解析して from_chat_id と message_id を得る ---
     def _parse_message_link(text: str):
-        # 1) トピック付き: t.me/c/<internal>/<topic_id>/<message_id>
-        m = re.search(r'(?:https?://)?t\.me/c/(\d+)/(\d+)/(\d+)', txt)
-        if m:
-            internal = int(m.group(1))
-            topic_id = int(m.group(2))
-            msg_id = int(m.group(3))  # 最後がメッセージID
-            from_chat_id = int(f"-100{internal}")
-            log.info(f"[link-parse] topic link parsed: internal={internal}, topic_id={topic_id}, message_id={msg_id}, chat_id={from_chat_id}")
-            return from_chat_id, msg_id
-
-        # 2) 通常: t.me/c/<internal>/<message_id>
-        m = re.search(r'(?:https?://)?t\.me/c/(\d+)/(\d+)', txt)
+        # t.me/c/<internal>/<message_id>
+        m = re.search(r'(?:https?://)?t\.me/c/(\d+)/(\d+)', (text or "").strip())
         if m:
             internal = int(m.group(1))
             msg_id = int(m.group(2))
-            from_chat_id = int(f"-100{internal}")
-            log.info(f"[link-parse] c-link parsed: internal={internal}, message_id={msg_id}, chat_id={from_chat_id}")
+            from_chat_id = int(f"-100{internal}")  # internal -> chat_id
             return from_chat_id, msg_id
 
-        # 3) パブリック: t.me/<username>/<message_id>
-        m = re.search(r'(?:https?://)?t\.me/([A-Za-z0-9_]{5,})/(\d+)', txt)
+        # t.me/<username>/<message_id>
+        m = re.search(r'(?:https?://)?t\.me/([A-Za-z0-9_]{5,})/(\d+)', (text or "").strip())
         if m:
             username = m.group(1)
             msg_id = int(m.group(2))
             try:
                 chat = bot.get_chat(f"@{username}")
-                log.info(f"[link-parse] public link parsed: username={username}, message_id={msg_id}, chat_id={chat.id}")
                 return chat.id, msg_id
-            except Exception as e:
-                log.warning(f"[link-parse] failed to resolve public chat @{username}: {e}")
+            except Exception:
                 return None
-
-        log.info("[link-parse] no link detected or unsupported format")
         return None
 
     # --- Шаг 1: Начало ---
@@ -129,14 +111,11 @@ def register_applicant_handlers(bot, user_states):
                     file_info = bot.get_file(item.document.file_id)
                     downloaded_file = bot.download_file(file_info.file_path)
                     df = pd.read_csv(io.BytesIO(downloaded_file))
-                    try:
-                        rendered = df.to_markdown(index=False)  # может требовать tabulate
-                    except Exception:
-                        rendered = df.to_csv(index=False)
-                    full_decision_text += "\n\n--- Данные из Google Forms (CSV) ---\n" + rendered
+                    # 注: to_markdown は tabulate 依存。環境に応じて to_csv へ切替可
+                    full_decision_text += "\n\n--- Данные из Google Forms (CSV) ---\n" + df.to_markdown(index=False)
                     mention_col = 'Username' if 'Username' in df.columns else 'UserID' if 'UserID' in df.columns else None
                     if mention_col:
-                        all_voters_to_mention.extend(df[mention_col].dropna().astype(str).tolist())
+                        all_voters_to_mention.extend(df[mention_col].dropna().tolist())
                 except Exception as e:
                     bot.send_message(message.chat.id, f"Ошибка обработки CSV: {e}. Этот файл будет проигнорирован.")
 
@@ -202,24 +181,27 @@ def register_applicant_handlers(bot, user_states):
     # 申請者ハンドラ（council状態は除外）
     @bot.message_handler(
         func=lambda message: (
-                user_states.get(message.from_user.id) is not None
-                and not str(user_states.get(message.from_user.id, {}).get('state', '')).startswith('awaiting_council_')
+            user_states.get(message.from_user.id) is not None
+            and not str(user_states.get(message.from_user.id, {}).get('state', '')).startswith('awaiting_council_')
         ),
         content_types=['text', 'poll', 'document']
     )
     def handle_dialogue_messages(message):
         user_id = message.from_user.id
         state_data = user_states.get(user_id)
-        if not state_data: return
+        if not state_data:
+            return
 
         state = state_data.get('state')
         case_id = state_data.get('case_id')
 
+        # --- Сбор объектов: 通常の転送は禁止。リンク必須。CSVは許可 ---
         if state == 'collecting_items':
             is_forwarded = message.forward_from or message.forward_from_chat
             is_document = message.content_type == 'document'
             is_poll = message.content_type == 'poll'
 
+            # 1) 通常の転送は禁止（丁寧に案内）
             if is_forwarded:
                 bot.send_message(
                     message.chat.id,
@@ -227,42 +209,45 @@ def register_applicant_handlers(bot, user_states):
                 )
                 return
 
+            # 2) テキスト中のリンクを解析・検証し、実体取得（ボットがそのグループに参加している必要あり）
             if message.content_type == 'text':
                 parsed = _parse_message_link(message.text)
                 if parsed:
                     from_chat_id, msg_id = parsed
-                    # EDITORS_CHANNEL_ID と一致必須
+
+                    # EDITORS_CHANNEL_ID（=COUNCIL_CHAT_ID）と一致するかを検証
                     if COUNCIL_CHAT_ID and str(from_chat_id) != str(COUNCIL_CHAT_ID):
-                        bot.send_message(
-                            message.chat.id,
-                            f"Ссылка ведет не на нашу приватную группу. Ожидался чат {COUNCIL_CHAT_ID}, "
-                            f"а в ссылке обнаружен чат {from_chat_id}. Пожалуйста, пришлите корректную ссылку."
-                        )
+                        bot.send_message(message.chat.id, "Ссылка ведет не на нашу приватную группу. Пожалуйста, пришлите корректную ссылку.")
                         return
+
                     try:
+                        # 実体取得: forward_message で内容を得る（成功＝真正性とアクセス確認OK）
                         fwd = bot.forward_message(
                             chat_id=message.chat.id,
                             from_chat_id=from_chat_id,
                             message_id=msg_id,
                             disable_notification=True
                         )
+                        # 得られたメッセージ（テキスト/ポール等）を items に保存
                         state_data['items'].append(fwd)
                         bot.send_message(message.chat.id, f"Ссылка подтверждена и принята ({len(state_data['items'])}). Перешлите еще или нажмите 'Готово'.")
                         return
-                    except Exception as e:
-                        log.warning(f"[copy_message] failed: {e}")
-                        bot.send_message(message.chat.id, "Не удалось подтвердить ссылку. Убедитесь, что бот состоит в чате и ссылка корректна.")
+                    except Exception:
+                        bot.send_message(message.chat.id, "Не удалось подтвердить ссылку. Убедитесь, bahwa бот состоит в чате и ссылка корректна.")
                         return
 
+            # 3) CSV は引き続き証拠として許可
             if is_document and message.document.mime_type == 'text/csv':
                 state_data['items'].append(message)
                 bot.send_message(message.chat.id, f"CSV принят ({len(state_data['items'])}). Перешлите еще или нажмите 'Готово'.")
                 return
 
+            # 4) poll を直接送るのは不可（リンク要求）
             if is_poll:
                 bot.send_message(message.chat.id, "Пожалуйста, пришлите ссылку на этот опрос (t.me/...), обычные пересылки и прямые опросы не принимаются.")
                 return
 
+            # 5) その他の通常テキストは案内のみ
             if message.content_type == 'text':
                 bot.send_message(message.chat.id, "Пришлите, пожалуйста, ссылку на сообщение (t.me/...) из приватной группы Совета или CSV-файл.")
             return
