@@ -15,40 +15,102 @@ from .council_flow import finalize_appeal
 
 # Railway の環境変数: プライベートグループ（評議会）の chat_id（例: -100xxxxxxxxxx）
 EDITORS_CHANNEL_ID = os.getenv('EDITORS_CHANNEL_ID')
-# 検証対象のチャットIDは EDITORS_CHANNEL_ID を使用します（リンク検証・真正性確認に利用）
+# 検証対象のチャットIDは EDITORS_CHANNEL_ID を使用
 COUNCIL_CHAT_ID = EDITORS_CHANNEL_ID
+# Кэш нормализованного chat_id источника (может быть скорректирован в рантайме)
+_RESOLVED_COUNCIL_ID = {'value': None}
+
+log = logging.getLogger("hjr-bot")
 
 def register_applicant_handlers(bot, user_states):
     """
     Регистрирует обработчики для процесса подачи апелляции.
     """
 
-    # --- ヘルパ: メッセージリンクを解析して from_chat_id と message_id を得る ---
+    # Нормализация COUNCIL_CHAT_ID из окружения (@username | внутренний id | -100...)
+    def _resolve_council_chat_id():
+        if _RESOLVED_COUNCIL_ID['value'] is not None:
+            return _RESOLVED_COUNCIL_ID['value']
+        raw = (COUNCIL_CHAT_ID or "").strip()
+        if not raw:
+            log.warning("[council-id] EDITORS_CHANNEL_ID пуст. Строгая проверка отключена.")
+            _RESOLVED_COUNCIL_ID['value'] = None
+            return None
+        try:
+            if raw.startswith("@"):
+                chat = bot.get_chat(raw)
+                _RESOLVED_COUNCIL_ID['value'] = int(chat.id)
+                log.info(f"[council-id] @{raw} -> { _RESOLVED_COUNCIL_ID['value'] }")
+                return _RESOLVED_COUNCIL_ID['value']
+            n = int(raw)
+            if n > 0:
+                _RESOLVED_COUNCIL_ID['value'] = int(f"-100{n}")
+                log.info(f"[council-id] internal {n} -> { _RESOLVED_COUNCIL_ID['value'] }")
+            else:
+                _RESOLVED_COUNCIL_ID['value'] = n
+                log.info(f"[council-id] numeric {n}")
+            return _RESOLVED_COUNCIL_ID['value']
+        except Exception as e:
+            try:
+                username = raw if raw.startswith("@") else f"@{raw}"
+                chat = bot.get_chat(username)
+                _RESOLVED_COUNCIL_ID['value'] = int(chat.id)
+                log.info(f"[council-id] fallback {username} -> { _RESOLVED_COUNCIL_ID['value'] }")
+                return _RESOLVED_COUNCIL_ID['value']
+            except Exception as e2:
+                log.error(f"[council-id] Невозможно распознать EDITORS_CHANNEL_ID='{raw}': {e} / {e2}")
+                _RESOLVED_COUNCIL_ID['value'] = None
+                return None
+
+    # Рантайм‑коррекция источника, если ссылка валидна и бот смог получить сообщение
+    def _set_council_chat_id_runtime(chat_id: int):
+        try:
+            _RESOLVED_COUNCIL_ID['value'] = int(chat_id)
+            log.warning(f"[council-id] Runtime override установлен: {chat_id}")
+        except Exception as e:
+            log.error(f"[council-id] Runtime override не применен: {e}")
+
+    # --- ヘルパ: メッセージリンクを解析 ---
     def _parse_message_link(text: str):
-        # t.me/c/<internal>/<message_id>
-        m = re.search(r'(?:https?://)?t\.me/c/(\d+)/(\d+)', (text or "").strip())
+        s = (text or "").strip()
+        log.debug(f"[link-parse] input='{s}'")
+        # 1) Топик: t.me/c/<internal>/<topic_id>/<message_id>
+        m = re.search(r'^(?:https?://)?t\.me/c/(\d+)/(\d+)/(\d+)(?:/.*)?(?:\?.*)?$', s)
+        if m:
+            internal = int(m.group(1))
+            topic_id = int(m.group(2))  # не используем при copy_message
+            msg_id = int(m.group(3))
+            from_chat_id = int(f"-100{internal}")
+            log.info(f"[link-parse] topic link: internal={internal} -> chat_id={from_chat_id}, topic_id={topic_id}, msg_id={msg_id}")
+            return from_chat_id, msg_id
+        # 2) Приватная: t.me/c/<internal>/<message_id>
+        m = re.search(r'^(?:https?://)?t\.me/c/(\d+)/(\d+)(?:/.*)?(?:\?.*)?$', s)
         if m:
             internal = int(m.group(1))
             msg_id = int(m.group(2))
-            from_chat_id = int(f"-100{internal}")  # internal -> chat_id
+            from_chat_id = int(f"-100{internal}")
+            log.info(f"[link-parse] c-link: internal={internal} -> chat_id={from_chat_id}, msg_id={msg_id}")
             return from_chat_id, msg_id
-
-        # t.me/<username>/<message_id>
-        m = re.search(r'(?:https?://)?t\.me/([A-Za-z0-9_]{5,})/(\d+)', (text or "").strip())
+        # 3) Публичная: t.me/<username>/<message_id>
+        m = re.search(r'^(?:https?://)?t\.me/([A-Za-z0-9_]{5,})/(\d+)(?:/.*)?(?:\?.*)?$', s)
         if m:
             username = m.group(1)
             msg_id = int(m.group(2))
             try:
                 chat = bot.get_chat(f"@{username}")
+                log.info(f"[link-parse] public: @{username} -> chat_id={chat.id}, msg_id={msg_id}")
                 return chat.id, msg_id
-            except Exception:
+            except Exception as e:
+                log.warning(f"[link-parse] resolve @{username} failed: {e}")
                 return None
+        log.debug("[link-parse] no match")
         return None
 
     # --- Шаг 1: Начало ---
     @bot.message_handler(commands=['start'])
     def send_welcome(message):
         user_states.pop(message.from_user.id, None)
+        log.info(f"[dialog] /start user={message.from_user.id} chat={message.chat.id}")
         markup = types.InlineKeyboardMarkup()
         appeal_button = types.InlineKeyboardButton("Подать апелляцию", callback_data="start_appeal")
         markup.add(appeal_button)
