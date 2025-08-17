@@ -7,6 +7,13 @@ from . import applicant_flow
 from . import council_flow
 from . import textcrafter_flow
 
+"""
+Handlers package — экспорт регистрации обработчиков.
+"""
+from .applicant_flow import register_applicant_handlers
+
+__all__ = ["register_applicant_handlers"]
+
 # Словарь для отслеживания состояния пользователей.
 # Он будет общим для всех модулей обработчиков.
 user_states = {}
