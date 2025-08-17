@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-Обработчики подачи апелляции. Делегирует парсинг ссылок и операции с Telegram
-в handlers.parse_link и handlers.telegram_helpers. При обработке ссылок:
-- пытаемся скопировать/переслать сообщение (copy/forward) — если успешно, принимаем ссылку;
-- если copy/forward не удался — показываем подробную ошибку и предлагаем действия.
+Обработчики подачи апелляции. Поведение согласовано с рабочим коммитом:
+- при получении ссылки пытаемся copy_message (fallback forward); если успешно — принимаем ссылку;
+  если ожидаемое EDITORS_CHANNEL_ID отличается — ставим runtime override через set_council_chat_id_runtime;
+- если copy/forward не удался — выполняем строгую проверку соответствия чата и даём понятную ошибку.
 """
 import logging
 import random
@@ -15,7 +15,12 @@ import appealManager
 
 from .parse_link import parse_message_link
 from .telegram_helpers import get_chat_safe, copy_or_forward_message
-from .council_helpers import is_link_from_council, resolve_council_id, request_counter_arguments
+from .council_helpers import (
+    is_link_from_council,
+    resolve_council_id,
+    set_council_chat_id_runtime,
+    request_counter_arguments,
+)
 
 log = logging.getLogger("hjr-bot.applicant_flow")
 
@@ -63,7 +68,7 @@ def register_applicant_handlers(bot, user_states: dict):
             pass
         bot.send_message(
             call.message.chat.id,
-            "Пожалуйста, пришлите ссылки на сообщения (t.me/...) из приватной группы/канала Совета, которые вы хотите оспорить. Когда закончите, нажмите 'Готово'.",
+            "Пожалуйста, пришлите ссылки на сообщения (t.me/...) из приватной группе/канале Совета, которые вы хотите оспорить. Когда закончите, нажмите 'Готово'.",
             reply_markup=markup
         )
 
@@ -169,7 +174,6 @@ def register_applicant_handlers(bot, user_states: dict):
                     # Попытка получить объект чата (информативно)
                     parsed_chat = get_chat_safe(bot, from_chat_id)
                     if not parsed_chat:
-                        # Если бот не может получить чат — предложить добавить бота
                         log.info(f"[collect] bot cannot get_chat for parsed {from_chat_id}")
                         bot.send_message(
                             message.chat.id,
@@ -179,7 +183,7 @@ def register_applicant_handlers(bot, user_states: dict):
                         )
                         return
 
-                    # Попытка copy/forward — делаем это в первую очередь (так было в рабочем варианте раньше)
+                    # Попытка copy/forward — сначала пытаемся получить сообщение
                     msg_obj = None
                     try:
                         msg_obj = copy_or_forward_message(bot, message.chat.id, from_chat_id, msg_id)
@@ -191,31 +195,27 @@ def register_applicant_handlers(bot, user_states: dict):
                         state_data["items"].append(msg_obj)
                         log.info(f"[collect] accepted (copied/forwarded), items={len(state_data['items'])}")
 
-                        # Если ссылка не совпадает со строго заданным EDITORS_CHANNEL_ID — логируем и уведомляем,
-                        # но не отвергаем, т.к. успешный copy/forward означает доступ бота к сообщению.
-                        if not is_link_from_council(bot, from_chat_id):
-                            resolved = resolve_council_id()
-                            log.warning(f"[collect] link from unexpected chat: parsed={from_chat_id} resolved={resolved}")
+                        # Если resolved настроен и не совпадает с parsed — делаем runtime override,
+                        # чтобы дальнейшие проверки использовали правильный chat_id (как в рабочем коде).
+                        resolved = resolve_council_id()
+                        if resolved and not is_link_from_council(bot, from_chat_id):
                             try:
-                                bot.send_message(
-                                    message.chat.id,
-                                    "Ссылка принята, но она указывает на чат/канал, отличный от основного канала Совета. "
-                                    "Если это ошибка — проверьте EDITORS_CHANNEL_ID. (Ссылка всё же принята, т.к. бот смог получить сообщение.)",
-                                    reply_markup=types.ReplyKeyboardRemove()
-                                )
+                                set_council_chat_id_runtime(from_chat_id)
+                                log.info(f"[collect] runtime-resolved EDITORS_CHANNEL_ID to {from_chat_id} after successful copy")
                             except Exception:
-                                pass
-                        else:
-                            # Обычное подтверждение
-                            try:
-                                bot.send_message(message.chat.id, f"Ссылка подтверждена и принята ({len(state_data['items'])}).", reply_markup=types.ReplyKeyboardRemove())
-                            except Exception:
-                                pass
+                                log.exception("[collect] failed to set runtime council id override")
+
+                        # Подтверждение пользователю
+                        try:
+                            bot.send_message(message.chat.id, f"Ссылка подтверждена и принята ({len(state_data['items'])}).", reply_markup=types.ReplyKeyboardRemove())
+                        except Exception:
+                            pass
                         return
 
                     # Если не удалось скопировать/переслать — тогда даём подробное объяснение и проверяем соответствие каналу
                     log.info(f"[collect] copy/forward failed for {from_chat_id}/{msg_id}")
-                    # Если ссылка явно не из нужного чата, даём информативное сообщение
+
+                    # Строгая проверка: если ссылка явно не из нужного чата — отклоняем
                     if not is_link_from_council(bot, from_chat_id):
                         resolved = resolve_council_id()
                         log.info(f"[collect] link rejected: parsed={from_chat_id} resolved={resolved}")

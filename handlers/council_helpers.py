@@ -1,10 +1,8 @@
 # -*- coding: utf-8 -*-
 """
 Вспомогательные функции, связанные с каналом/чатом Совета (EDITORS_CHANNEL_ID).
-- resolve_council_id() -> int | str | None
-- is_link_from_council(bot, parsed_from_chat_id) -> bool
-- request_counter_arguments(bot, case_id) -> None
-Этот модуль не заменяет ваш council_flow.py — он даёт утилиты, которые applicant_flow может использовать.
+Добавлена функция set_council_chat_id_runtime для динамической замены резолв-значения
+если бот успешно получил сообщение из другого чата (runtime override).
 """
 import os
 import re
@@ -50,6 +48,28 @@ def resolve_council_id() -> Optional[Union[int, str]]:
 
     log.error(f"[council_helpers] cannot resolve EDITORS_CHANNEL_ID: '{raw}'")
     return None
+
+def set_council_chat_id_runtime(chat_id: Union[int, str]):
+    """
+    Устанавливает runtime-override для резолва EDITORS_CHANNEL_ID.
+    Принимает либо int chat_id (например -100...) либо строку '@username'.
+    Это позволяет автоматически подстроиться, если переменная окружения была неверной,
+    но бот успешно прошёл проверку доступа (copy/forward).
+    """
+    try:
+        if isinstance(chat_id, str):
+            s = chat_id.strip()
+            # если строка числовая — приведение к int
+            if re.fullmatch(r'-?\d+', s):
+                val: Union[int, str] = int(s)
+            else:
+                val = s if s.startswith("@") else f"@{s}"
+        else:
+            val = int(chat_id)
+        _RESOLVED["value"] = val
+        log.info(f"[council_helpers] runtime override: resolved set to {val}")
+    except Exception as e:
+        log.exception(f"[council_helpers] failed to set runtime council id override for {chat_id}: {e}")
 
 def is_link_from_council(bot, parsed_from_chat_id: Union[int, str]) -> bool:
     """
