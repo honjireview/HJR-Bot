@@ -7,12 +7,13 @@ import os
 import pandas as pd
 import io
 import re
+import logging
 from datetime import datetime, timedelta
 
 import appealManager
 from .council_flow import finalize_appeal
 
-# Railway の環境変数に保存されているプライベートグループ（評議会）の chat_id
+# Railway の環境変数: プライベートグループ（評議会）の chat_id（例: -100xxxxxxxxxx）
 EDITORS_CHANNEL_ID = os.getenv('EDITORS_CHANNEL_ID')
 # 検証対象のチャットIDは EDITORS_CHANNEL_ID を使用します（リンク検証・真正性確認に利用）
 COUNCIL_CHAT_ID = EDITORS_CHANNEL_ID
