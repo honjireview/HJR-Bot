@@ -45,16 +45,39 @@ def register_applicant_handlers(bot, user_states):
         log.warning(f"[council-id] Runtime override установлен: {chat_id}")
 
     def _parse_message_link(text: str):
+        """
+        Поддерживает форматы:
+          - https://t.me/c/2063604198/3087/7972  (берёт последний числовой сегмент как message_id)
+          - https://t.me/username/3087
+          - без https:// тоже работает
+        Возвращает (from_chat_id, message_id) или None.
+        """
         s = (text or "").strip()
-        m = re.search(r't\.me/(?:c/)?(\d+)/(\d+)', s)
+        # приватные чаты/каналы: t.me/c/<internal>/<...>/<message_id>
+        if 't.me/c/' in s:
+            # Найти все числовые сегменты: '/2063604198', '/3087', '/7972' -> ['2063604198','3087','7972']
+            nums = re.findall(r'/([0-9]+)', s)
+            if len(nums) >= 2:
+                try:
+                    chat_internal_id = nums[0]
+                    msg_id = nums[-1]  # берем последний числовой сегмент
+                    from_chat_id = int(f"-100{chat_internal_id}")
+                    return from_chat_id, int(msg_id)
+                except Exception:
+                    return None
+            return None
+        # публичный канал/профиль: t.me/<username>/<...>/<message_id>
+        m = re.search(r't\.me/([A-Za-z0-9_]{5,})', s)
         if m:
-            chat_internal_id, msg_id = map(int, m.groups())
-            from_chat_id = int(f"-100{chat_internal_id}")
-            return from_chat_id, msg_id
-        m = re.search(r't\.me/([A-Za-z0-9_]{5,})/(\d+)', s)
-        if m:
-            username, msg_id = m.groups()
-            return f"@{username}", int(msg_id)
+            username = m.group(1)
+            nums = re.findall(r'/([0-9]+)', s)
+            if nums:
+                try:
+                    msg_id = int(nums[-1])
+                    return f"@{username}", msg_id
+                except Exception:
+                    return None
+            return None
         return None
 
     @bot.message_handler(commands=['start'])
@@ -64,7 +87,7 @@ def register_applicant_handlers(bot, user_states):
         markup = types.InlineKeyboardMarkup()
         appeal_button = types.InlineKeyboardButton("Подать апелляцию", callback_data="start_appeal")
         markup.add(appeal_button)
-        bot.send_message(message.chat.id, "Здравствуйте! Это бот для подачи апелляций проекта Honji Review. Нажмите кнопку ниже, чтобы начать процесс.", reply_markup=markup)
+        bot.send_message(message.chat.id, "Здравствуйте! Это бот для подачи апелляций проекта Honji Review. Нажмите кнопку ниже, чтобы начать процесс.")
 
     @bot.message_handler(commands=['cancel'])
     def cancel_process(message):
@@ -82,7 +105,7 @@ def register_applicant_handlers(bot, user_states):
         markup = types.InlineKeyboardMarkup()
         done_button = types.InlineKeyboardButton("Готово, я все отправил(а)", callback_data="done_collecting")
         markup.add(done_button)
-        bot.send_message(call.message.chat.id, "Пожалуйста, пришлите ссылки на сообщения (t.me/...) из приватной группы Совета, которые вы хотите оспорить. Когда закончите, нажмите 'Готово'.\n\nДля отмены в любой момент введите /cancel", reply_markup=markup)
+        bot.send_message(call.message.chat.id, "Пожалуйста, пришлите ссылки на сообщения (t.me/...) из приватной группы Совета, которые вы хотите оспорить. Когда закончите, нажмите 'Готово'.")
 
     @bot.callback_query_handler(func=lambda call: call.data == "done_collecting")
     def handle_done_collecting_callback(call):
@@ -159,18 +182,47 @@ def register_applicant_handlers(bot, user_states):
                 if parsed:
                     from_chat_id, msg_id = parsed
                     log.info(f"[collect] parsed from_chat_id={from_chat_id} msg_id={msg_id}")
+
+                    # Проверка доступа к чату до копирования (даст понятную ошибку, если бот не в чате)
+                    try:
+                        bot.get_chat(from_chat_id)
+                    except Exception as e_gc:
+                        log.warning(f"[collect] get_chat failed for {from_chat_id}: {e_gc}")
+                        bot.send_message(
+                            message.chat.id,
+                            "Не удалось получить сообщение по ссылке. Пожалуйста, добавьте бота (@hjrmainbot) в приватную группу/канал, "
+                            "чтобы он мог получить сообщение, и попробуйте снова. Если это публичный канал, убедитесь, что ссылка корректна."
+                        )
+                        return
+
+                    # Попытка copy_message, fallback на forward_message, информативные сообщения
                     try:
                         copied = bot.copy_message(chat_id=message.chat.id, from_chat_id=from_chat_id, message_id=msg_id)
                         bot.delete_message(chat_id=message.chat.id, message_id=copied.message_id)
 
                         state_data['items'].append(copied)
-                        log.info(f"[collect] accepted, items={len(state_data['items'])}")
+                        log.info(f"[collect] accepted (copied), items={len(state_data['items'])}")
                         bot.send_message(message.chat.id, f"Ссылка подтверждена и принята ({len(state_data['items'])}).")
                         return
-                    except Exception as e:
-                        log.warning(f"[collect] copy_message failed: {e}")
-                        bot.send_message(message.chat.id, "Не удалось получить сообщение по ссылке. Убедитесь, что бот является участником чата, на который вы ссылаетесь.")
-                        return
+                    except Exception as e_copy:
+                        log.warning(f"[collect] copy_message failed: {e_copy}. Попытка forward_message как fallback.")
+                        try:
+                            forwarded = bot.forward_message(chat_id=message.chat.id, from_chat_id=from_chat_id, message_id=msg_id)
+                            bot.delete_message(chat_id=message.chat.id, message_id=forwarded.message_id)
+                            state_data['items'].append(forwarded)
+                            log.info(f"[collect] accepted (forwarded), items={len(state_data['items'])}")
+                            bot.send_message(message.chat.id, f"Ссылка подтверждена и принята ({len(state_data['items'])}).")
+                            return
+                        except Exception as e_forw:
+                            log.warning(f"[collect] forward_message failed: {e_forw}")
+                            bot.send_message(
+                                message.chat.id,
+                                "Не удалось получить сообщение по ссылке. Убедитесь, что:\n"
+                                "- вы дали боту доступ к этой группе/каналу (добавьте @hjrmainbot),\n"
+                                "- ссылка корректна (t.me/... ), и\n"
+                                "- сообщение с таким id существует.\n\nПосле добавления бота повторите попытку."
+                            )
+                            return
 
             bot.send_message(message.chat.id, "Пришлите, пожалуйста, ссылку на сообщение (t.me/...).")
             return
@@ -184,7 +236,7 @@ def register_applicant_handlers(bot, user_states):
                 user_states[user_id]['state'] = 'awaiting_main_argument'
                 bot.send_message(message.chat.id, "Понятно. Теперь, пожалуйста, изложите ваши основные аргументы.", reply_markup=types.ReplyKeyboardRemove())
             elif message.text.startswith("Нет"):
-                bot.send_message(message.chat.id, "Согласно правилам, все участники должны принимать участие в голосовании. Ваша заявка отклонена.", reply_markup=types.ReplyKeyboardRemove())
+                bot.send_message(message.chat.id, "Согласно правилам, все участники должны принимать участие в голосовании. Ваша апелляция отклонена.")
                 appealManager.delete_appeal(case_id)
                 user_states.pop(user_id, None)
             else:
