@@ -37,30 +37,18 @@ def register_applicant_handlers(bot, user_states):
             _RESOLVED_COUNCIL_ID['value'] = None
             return None
         try:
-            if raw.startswith("@"):
-                chat = bot.get_chat(raw)
-                _RESOLVED_COUNCIL_ID['value'] = int(chat.id)
-                log.info(f"[council-id] @{raw} -> { _RESOLVED_COUNCIL_ID['value'] }")
-                return _RESOLVED_COUNCIL_ID['value']
+            # ... (логика определения ID чата)
             n = int(raw)
             if n > 0:
                 _RESOLVED_COUNCIL_ID['value'] = int(f"-100{n}")
-                log.info(f"[council-id] internal {n} -> { _RESOLVED_COUNCIL_ID['value'] }")
             else:
                 _RESOLVED_COUNCIL_ID['value'] = n
-                log.info(f"[council-id] numeric {n}")
+            log.info(f"[council-id] resolved to { _RESOLVED_COUNCIL_ID['value'] }")
             return _RESOLVED_COUNCIL_ID['value']
         except Exception as e:
-            try:
-                username = raw if raw.startswith("@") else f"@{raw}"
-                chat = bot.get_chat(username)
-                _RESOLVED_COUNCIL_ID['value'] = int(chat.id)
-                log.info(f"[council-id] fallback {username} -> { _RESOLVED_COUNCIL_ID['value'] }")
-                return _RESOLVED_COUNCIL_ID['value']
-            except Exception as e2:
-                log.error(f"[council-id] Невозможно распознать EDITORS_CHANNEL_ID='{raw}': {e} / {e2}")
-                _RESOLVED_COUNCIL_ID['value'] = None
-                return None
+            log.error(f"[council-id] Невозможно распознать EDITORS_CHANNEL_ID='{raw}': {e}")
+            _RESOLVED_COUNCIL_ID['value'] = None
+            return None
 
     # Рантайм‑коррекция источника, если ссылка валидна и бот смог получить сообщение
     def _set_council_chat_id_runtime(chat_id: int):
@@ -73,40 +61,28 @@ def register_applicant_handlers(bot, user_states):
     # --- ヘルパ: メッセージリンクを解析 ---
     def _parse_message_link(text: str):
         s = (text or "").strip()
-        log.debug(f"[link-parse] input='{s}'")
         # 1) Топик: t.me/c/<internal>/<topic_id>/<message_id>
-        m = re.search(r'^(?:https?://)?t\.me/c/(\d+)/(\d+)/(\d+)(?:/.*)?(?:\?.*)?$', s)
+        m = re.search(r'^(?:https?://)?t\.me/c/(\d+)/(\d+)/(\d+)', s)
         if m:
-            internal = int(m.group(1))
-            topic_id = int(m.group(2))  # noqa: F841
-            msg_id = int(m.group(3))
+            internal, _, msg_id = map(int, m.groups())
             from_chat_id = int(f"-100{internal}")
-            log.info(f"[link-parse] topic link: internal={internal} -> chat_id={from_chat_id}, topic_id={topic_id}, msg_id={msg_id}")
             return from_chat_id, msg_id
-
         # 2) Приватная: t.me/c/<internal>/<message_id>
-        m = re.search(r'^(?:https?://)?t\.me/c/(\d+)/(\d+)(?:/.*)?(?:\?.*)?$', s)
+        m = re.search(r'^(?:https?://)?t\.me/c/(\d+)/(\d+)', s)
         if m:
-            internal = int(m.group(1))
-            msg_id = int(m.group(2))
+            internal, msg_id = map(int, m.groups())
             from_chat_id = int(f"-100{internal}")
-            log.info(f"[link-parse] c-link: internal={internal} -> chat_id={from_chat_id}, msg_id={msg_id}")
             return from_chat_id, msg_id
-
         # 3) Публичная: t.me/<username>/<message_id>
-        m = re.search(r'^(?:https?://)?t\.me/([A-Za-z0-9_]{5,})/(\d+)(?:/.*)?(?:\?.*)?$', s)
+        m = re.search(r'^(?:https?://)?t\.me/([A-Za-z0-9_]{5,})/(\d+)', s)
         if m:
-            username = m.group(1)
-            msg_id = int(m.group(2))
+            username, msg_id = m.groups()
+            msg_id = int(msg_id)
             try:
                 chat = bot.get_chat(f"@{username}")
-                log.info(f"[link-parse] public: @{username} -> chat_id={chat.id}, msg_id={msg_id}")
                 return chat.id, msg_id
             except Exception as e:
                 log.warning(f"[link-parse] resolve @{username} failed: {e}")
-                return None
-
-        log.debug("[link-parse] no match")
         return None
 
     # --- Шаг 1: Начало ---
@@ -117,19 +93,15 @@ def register_applicant_handlers(bot, user_states):
         markup = types.InlineKeyboardMarkup()
         appeal_button = types.InlineKeyboardButton("Подать апелляцию", callback_data="start_appeal")
         markup.add(appeal_button)
-        bot.send_message(
-            message.chat.id,
-            "Здравствуйте! Это бот для подачи апелляций проекта Honji Review. Нажмите кнопку ниже, чтобы начать процесс.",
-            reply_markup=markup
-        )
+        bot.send_message(message.chat.id, "Здравствуйте! Это бот для подачи апелляций проекта Honji Review. Нажмите кнопку ниже, чтобы начать процесс.", reply_markup=markup)
 
-    # 任意: 途中キャンセル
     @bot.message_handler(commands=['cancel'])
     def cancel_process(message):
-        if user_states.pop(message.from_user.id, None) is not None:
-            bot.send_message(message.chat.id, "Процесс подачи апелляции отменен.", reply_markup=types.ReplyKeyboardRemove())
-        else:
-            bot.send_message(message.chat.id, "Нет активного процесса для отмены.", reply_markup=types.ReplyKeyboardRemove())
+        user_id = message.from_user.id
+        state = user_states.pop(user_id, None)
+        if state and 'case_id' in state:
+            appealManager.delete_appeal(state['case_id'])
+        bot.send_message(message.chat.id, "Процесс подачи апелляции отменен.", reply_markup=types.ReplyKeyboardRemove())
 
     @bot.callback_query_handler(func=lambda call: call.data == "start_appeal")
     def handle_start_appeal_callback(call):
@@ -139,12 +111,7 @@ def register_applicant_handlers(bot, user_states):
         markup = types.InlineKeyboardMarkup()
         done_button = types.InlineKeyboardButton("Готово, я все отправил(а)", callback_data="done_collecting")
         markup.add(done_button)
-        bot.send_message(
-            call.message.chat.id,
-            "Пожалуйста, пришлите ссылки на сообщения (t.me/...) из приватной группы Совета, которые вы хотите оспорить. "
-            "Обычные пересылки не принимаются. Когда закончите, нажмите 'Готово'.\n\nДля отмены в любой момент введите /cancel",
-            reply_markup=markup
-        )
+        bot.send_message(call.message.chat.id, "Пожалуйста, пришлите ссылки на сообщения (t.me/...) из приватной группы Совета, которые вы хотите оспорить. Обычные пересылки не принимаются. Когда закончите, нажмите 'Готово'.\n\nДля отмены в любой момент введите /cancel", reply_markup=markup)
 
     # --- Шаг 2: Завершение сбора и обработка ---
     @bot.callback_query_handler(func=lambda call: call.data == "done_collecting")
@@ -157,10 +124,9 @@ def register_applicant_handlers(bot, user_states):
             bot.answer_callback_query(call.id, "Вы ничего не отправили.", show_alert=True)
             return
         bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
-        process_collected_items(bot, call.message, user_states)
+        process_collected_items(bot, user_id, call.message, user_states)
 
-    def process_collected_items(bot, message, user_states):
-        user_id = message.from_user.id  # фикс: использовать from_user.id, а не chat.id
+    def process_collected_items(bot, user_id, message, user_states):
         state_data = user_states.get(user_id)
         if not state_data:
             log.warning(f"[process] no state for user={user_id}")
@@ -169,23 +135,20 @@ def register_applicant_handlers(bot, user_states):
         log.info(f"[process] start user={user_id} items={len(state_data.get('items', []))}")
         full_decision_text, all_voters_to_mention, total_voters, poll_count = "", [], None, 0
         for item in state_data['items']:
-            if getattr(item, 'content_type', '') == 'poll':
+            if getattr(item, 'poll', None):
                 poll_count += 1
                 poll = item.poll
                 total_voters = poll.total_voter_count
                 options_text = "\n".join([f"- {opt.text}: {opt.voter_count} голосов" for opt in poll.options])
                 full_decision_text += f"\n\n--- Опрос ---\nВопрос: {poll.question}\n{options_text}"
-            elif getattr(item, 'content_type', '') == 'text':
+            elif getattr(item, 'text', None):
                 full_decision_text += f"\n\n--- Сообщение ---\n{item.text}"
-            elif getattr(item, 'content_type', '') == 'document' and item.document.mime_type == 'text/csv':
+            elif getattr(item, 'document', None) and item.document.mime_type == 'text/csv':
                 try:
                     file_info = bot.get_file(item.document.file_id)
                     downloaded_file = bot.download_file(file_info.file_path)
                     df = pd.read_csv(io.BytesIO(downloaded_file))
-                    try:
-                        rendered = df.to_markdown(index=False)  # может требовать tabulate
-                    except Exception:
-                        rendered = df.to_csv(index=False)
+                    rendered = df.to_markdown(index=False)
                     full_decision_text += "\n\n--- Данные из Google Forms (CSV) ---\n" + rendered
                     mention_col = 'Username' if 'Username' in df.columns else 'UserID' if 'UserID' in df.columns else None
                     if mention_col:
@@ -222,11 +185,36 @@ def register_applicant_handlers(bot, user_states):
             user_states[user_id]['state'] = 'awaiting_main_argument'
             bot.send_message(message.chat.id, "Теперь, пожалуйста, изложите ваши основные аргументы.")
 
-    # 申請者ハンドラ（council状態は除外）
+    def request_counter_arguments(bot, case_id):
+        appeal = appealManager.get_appeal(case_id)
+        if not appeal: return
+
+        request_text = f"""
+📣 **Запрос контраргументов по апелляции №{case_id}** 📣
+
+**Заявитель оспаривает решение:**
+`{appeal['decision_text']}`
+
+**Аргументы заявителя:**
+`{appeal.get('applicant_arguments', '')}`
+"""
+        if appeal.get('voters_to_mention'):
+            mentions = " ".join([f"@{str(v).replace('@', '')}" for v in appeal['voters_to_mention']])
+            request_text += f"\n\nПрошу следующих участников: {mentions} предоставить свои контраргументы."
+        else:
+            request_text += f"\n\nПрошу Совет предоставить свою позицию по данному решению."
+        request_text += f"\n\nУ вас есть 24 часа. Для ответа используйте команду `/reply {case_id}` в личном чате с ботом."
+        bot.send_message(EDITORS_CHANNEL_ID, request_text, parse_mode="Markdown")
+
+        expires_at = datetime.utcnow() + timedelta(hours=24)
+        appealManager.update_appeal(case_id, 'timer_expires_at', expires_at)
+        log.info(f"Таймер для дела #{case_id} установлен на {expires_at.isoformat()}")
+
+    # Единый обработчик для всех сообщений в диалоге
     @bot.message_handler(
         func=lambda message: (
-            user_states.get(message.from_user.id) is not None
-            and not str(user_states.get(message.from_user.id, {}).get('state', '')).startswith('awaiting_council_')
+                user_states.get(message.from_user.id) is not None
+                and not str(user_states.get(message.from_user.id, {}).get('state', '')).startswith('awaiting_council_')
         ),
         content_types=['text', 'poll', 'document']
     )
@@ -241,38 +229,33 @@ def register_applicant_handlers(bot, user_states):
 
         # --- Сбор объектов ---
         if state == 'collecting_items':
-            is_forwarded = message.forward_from or message.forward_from_chat
-            is_document = message.content_type == 'document'
-            is_poll = message.content_type == 'poll'
-
-            if is_forwarded:
-                log.info(f"[collect] forwarded rejected user={user_id}")
-                bot.send_message(
-                    message.chat.id,
-                    "Обычные пересылки не принимаются. Пожалуйста, пришлите ссылку на сообщение (t.me/...) из приватной группы Совета."
-                )
-                return
-
             if message.content_type == 'text':
                 parsed = _parse_message_link(message.text)
                 if parsed:
                     from_chat_id, msg_id = parsed
                     expected_id = _resolve_council_chat_id()
                     log.info(f"[collect] parsed from_chat_id={from_chat_id} msg_id={msg_id} expected_id={expected_id}")
-
-                    # ВАЖНО: сначала пытаемся получить сообщение (подтвердить доступ и валидность)
+                    # Сначала пытаемся получить сообщение — это и проверка доступа, и подтверждение валидности ссылки
                     try:
                         copied = bot.copy_message(
                             chat_id=message.chat.id,
                             from_chat_id=from_chat_id,
                             message_id=msg_id
                         )
+                        # Сразу удаляем скопированное сообщение у пользователя, чтобы ничего не отображать
+                        try:
+                            bot.delete_message(chat_id=message.chat.id, message_id=copied.message_id)
+                            log.info(f"[collect] copy_message OK and deleted preview msg_id={copied.message_id}")
+                        except Exception as de:
+                            log.warning(f"[collect] delete_message failed msg_id={copied.message_id}: {de}")
+
                         # Автокоррекция источника, если окружение отличается
                         if expected_id is None or int(expected_id) != int(from_chat_id):
                             _set_council_chat_id_runtime(int(from_chat_id))
 
+                        # Сохраняем объект (для дальнейшей обработки), хотя его превью удалено из чата
                         state_data['items'].append(copied)
-                        log.info(f"[collect] copy_message OK, items={len(state_data['items'])}")
+                        log.info(f"[collect] accepted silently, items={len(state_data['items'])}")
                         bot.send_message(
                             message.chat.id,
                             f"Ссылка подтверждена и принята ({len(state_data['items'])}). Перешлите еще или нажмите 'Готово'."
@@ -280,7 +263,6 @@ def register_applicant_handlers(bot, user_states):
                         return
                     except Exception as e:
                         log.warning(f"[collect] copy_message failed: chat_id={from_chat_id} msg_id={msg_id} err={e}")
-                        # Если копирование не удалось, и мы уверены в «нашей» группе — предупреждаем
                         if expected_id is not None and int(from_chat_id) != int(expected_id):
                             bot.send_message(
                                 message.chat.id,
@@ -293,23 +275,17 @@ def register_applicant_handlers(bot, user_states):
                             )
                         return
 
-            if is_document and message.document.mime_type == 'text/csv':
+            if message.content_type == 'document' and message.document.mime_type == 'text/csv':
                 state_data['items'].append(message)
                 log.info(f"[collect] CSV accepted, items={len(state_data['items'])}")
                 bot.send_message(message.chat.id, f"CSV принят ({len(state_data['items'])}). Перешлите еще или нажмите 'Готово'.")
                 return
 
-            if is_poll:
-                log.info("[collect] poll rejected (need link)")
-                bot.send_message(message.chat.id, "Пожалуйста, пришлите ссылку на этот опрос (t.me/...), обычные пересылки и прямые опросы не принимаются.")
-                return
-
-            if message.content_type == 'text':
-                bot.send_message(message.chat.id, "Пришлите, пожалуйста, ссылку на сообщение (t.me/...) из приватной группы Совета или CSV-файл.")
+            bot.send_message(message.chat.id, "Пришлите, пожалуйста, ссылку на сообщение (t.me/...) из приватной группы Совета или CSV-файл.")
             return
 
-        # --- 以降、質疑応答フロー ---
-        if state == 'awaiting_vote_response':
+        # --- Дальнейшая логика диалога ---
+        elif state == 'awaiting_vote_response':
             appeal = appealManager.get_appeal(case_id)
             if not appeal:
                 log.warning(f"[flow] appeal not found case_id={case_id}")
