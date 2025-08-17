@@ -136,13 +136,11 @@ def register_textcrafter_handlers(bot, user_states):
         dialog = user_states[user_id][DIALOG_KEY]
 
         if message.content_type == 'photo':
-            # Берем самое большое фото
             dialog['photo_file_id'] = message.photo[-1].file_id
             bot.send_message(message.chat.id, "Отлично! Теперь введите текст подписи к изображению.")
             user_states[user_id]['state'] = STATE_ADDING_CAPTION
             return
 
-        # текст
         if message.text and message.text.strip().lower() == '/skip':
             dialog['photo_file_id'] = None
             bot.send_message(message.chat.id, "Хорошо, без фото. Теперь введите текст сообщения.")

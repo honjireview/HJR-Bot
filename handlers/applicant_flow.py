@@ -129,11 +129,14 @@ def register_applicant_handlers(bot, user_states):
                     file_info = bot.get_file(item.document.file_id)
                     downloaded_file = bot.download_file(file_info.file_path)
                     df = pd.read_csv(io.BytesIO(downloaded_file))
-                    # 注: to_markdown は tabulate 依存。環境に応じて to_csv へ切替可
-                    full_decision_text += "\n\n--- Данные из Google Forms (CSV) ---\n" + df.to_markdown(index=False)
+                    try:
+                        rendered = df.to_markdown(index=False)  # может требовать tabulate
+                    except Exception:
+                        rendered = df.to_csv(index=False)
+                    full_decision_text += "\n\n--- Данные из Google Forms (CSV) ---\n" + rendered
                     mention_col = 'Username' if 'Username' in df.columns else 'UserID' if 'UserID' in df.columns else None
                     if mention_col:
-                        all_voters_to_mention.extend(df[mention_col].dropna().tolist())
+                        all_voters_to_mention.extend(df[mention_col].dropna().astype(str).tolist())
                 except Exception as e:
                     bot.send_message(message.chat.id, f"Ошибка обработки CSV: {e}. Этот файл будет проигнорирован.")
 
@@ -199,8 +202,8 @@ def register_applicant_handlers(bot, user_states):
     # 申請者ハンドラ（council状態は除外）
     @bot.message_handler(
         func=lambda message: (
-            user_states.get(message.from_user.id) is not None
-            and not str(user_states.get(message.from_user.id, {}).get('state', '')).startswith('awaiting_council_')
+                user_states.get(message.from_user.id) is not None
+                and not str(user_states.get(message.from_user.id, {}).get('state', '')).startswith('awaiting_council_')
         ),
         content_types=['text', 'poll', 'document']
     )
@@ -243,13 +246,7 @@ def register_applicant_handlers(bot, user_states):
                             message_id=msg_id,
                             disable_notification=True
                         )
-                        # ВАЖНО: используем copy_message, чтобы получить содержимое по message_id из приватной группы
-                        copied = bot.copy_message(
-                            chat_id=message.chat.id,
-                            from_chat_id=from_chat_id,
-                            message_id=msg_id
-                        )
-                        state_data['items'].append(copied)
+                        state_data['items'].append(fwd)
                         bot.send_message(message.chat.id, f"Ссылка подтверждена и принята ({len(state_data['items'])}). Перешлите еще или нажмите 'Готово'.")
                         return
                     except Exception as e:
