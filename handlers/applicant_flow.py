@@ -78,11 +78,12 @@ def register_applicant_handlers(bot, user_states):
         m = re.search(r'^(?:https?://)?t\.me/c/(\d+)/(\d+)/(\d+)(?:/.*)?(?:\?.*)?$', s)
         if m:
             internal = int(m.group(1))
-            topic_id = int(m.group(2))  # не используем при copy_message
+            topic_id = int(m.group(2))  # noqa: F841
             msg_id = int(m.group(3))
             from_chat_id = int(f"-100{internal}")
             log.info(f"[link-parse] topic link: internal={internal} -> chat_id={from_chat_id}, topic_id={topic_id}, msg_id={msg_id}")
             return from_chat_id, msg_id
+
         # 2) Приватная: t.me/c/<internal>/<message_id>
         m = re.search(r'^(?:https?://)?t\.me/c/(\d+)/(\d+)(?:/.*)?(?:\?.*)?$', s)
         if m:
@@ -91,6 +92,7 @@ def register_applicant_handlers(bot, user_states):
             from_chat_id = int(f"-100{internal}")
             log.info(f"[link-parse] c-link: internal={internal} -> chat_id={from_chat_id}, msg_id={msg_id}")
             return from_chat_id, msg_id
+
         # 3) Публичная: t.me/<username>/<message_id>
         m = re.search(r'^(?:https?://)?t\.me/([A-Za-z0-9_]{5,})/(\d+)(?:/.*)?(?:\?.*)?$', s)
         if m:
@@ -103,6 +105,7 @@ def register_applicant_handlers(bot, user_states):
             except Exception as e:
                 log.warning(f"[link-parse] resolve @{username} failed: {e}")
                 return None
+
         log.debug("[link-parse] no match")
         return None
 
@@ -132,6 +135,7 @@ def register_applicant_handlers(bot, user_states):
     def handle_start_appeal_callback(call):
         user_id = call.from_user.id
         user_states[user_id] = {'state': 'collecting_items', 'items': []}
+        log.info(f"[dialog] start_appeal user={user_id} state=collecting_items")
         markup = types.InlineKeyboardMarkup()
         done_button = types.InlineKeyboardButton("Готово, я все отправил(а)", callback_data="done_collecting")
         markup.add(done_button)
@@ -147,6 +151,8 @@ def register_applicant_handlers(bot, user_states):
     def handle_done_collecting_callback(call):
         user_id = call.from_user.id
         state_data = user_states.get(user_id)
+        items_count = len(state_data.get('items', [])) if state_data else 0
+        log.info(f"[dialog] done_collecting user={user_id} items={items_count}")
         if not state_data or not state_data.get('items'):
             bot.answer_callback_query(call.id, "Вы ничего не отправили.", show_alert=True)
             return
@@ -154,11 +160,13 @@ def register_applicant_handlers(bot, user_states):
         process_collected_items(bot, call.message, user_states)
 
     def process_collected_items(bot, message, user_states):
-        user_id = message.chat.id
+        user_id = message.from_user.id  # фикс: использовать from_user.id, а не chat.id
         state_data = user_states.get(user_id)
         if not state_data:
+            log.warning(f"[process] no state for user={user_id}")
             return
 
+        log.info(f"[process] start user={user_id} items={len(state_data.get('items', []))}")
         full_decision_text, all_voters_to_mention, total_voters, poll_count = "", [], None, 0
         for item in state_data['items']:
             if getattr(item, 'content_type', '') == 'poll':
@@ -174,12 +182,17 @@ def register_applicant_handlers(bot, user_states):
                     file_info = bot.get_file(item.document.file_id)
                     downloaded_file = bot.download_file(file_info.file_path)
                     df = pd.read_csv(io.BytesIO(downloaded_file))
-                    # 注: to_markdown は tabulate 依存。環境に応じて to_csv へ切替可
-                    full_decision_text += "\n\n--- Данные из Google Forms (CSV) ---\n" + df.to_markdown(index=False)
+                    try:
+                        rendered = df.to_markdown(index=False)  # может требовать tabulate
+                    except Exception:
+                        rendered = df.to_csv(index=False)
+                    full_decision_text += "\n\n--- Данные из Google Forms (CSV) ---\n" + rendered
                     mention_col = 'Username' if 'Username' in df.columns else 'UserID' if 'UserID' in df.columns else None
                     if mention_col:
-                        all_voters_to_mention.extend(df[mention_col].dropna().tolist())
+                        all_voters_to_mention.extend(df[mention_col].dropna().astype(str).tolist())
+                    log.info(f"[process] CSV parsed rows={len(df)} mention_col={mention_col}")
                 except Exception as e:
+                    log.error(f"[process] CSV error: {e}")
                     bot.send_message(message.chat.id, f"Ошибка обработки CSV: {e}. Этот файл будет проигнорирован.")
 
         if poll_count > 1:
@@ -197,6 +210,7 @@ def register_applicant_handlers(bot, user_states):
             'status': 'collecting'
         }
         appealManager.create_appeal(case_id, initial_data)
+        log.info(f"[process] case created id={case_id} poll_count={poll_count} total_voters={total_voters}")
         bot.send_message(message.chat.id, f"Все объекты приняты. Вашему делу присвоен номер #{case_id}.")
 
         if poll_count == 1:
@@ -207,39 +221,6 @@ def register_applicant_handlers(bot, user_states):
         else:
             user_states[user_id]['state'] = 'awaiting_main_argument'
             bot.send_message(message.chat.id, "Теперь, пожалуйста, изложите ваши основные аргументы.")
-
-    def request_counter_arguments(bot, case_id):
-        appeal = appealManager.get_appeal(case_id)
-        if not appeal:
-            return
-
-        request_text = f"""
-📣 **Запрос контраргументов по апелляции №{case_id}** 📣
-
-**Заявитель оспаривает решение:**
-`{appeal['decision_text']}`
-
-**Аргументы заявителя:**
-`{appeal.get('applicant_arguments', '')}`
-"""
-        if appeal.get('voters_to_mention'):
-            mentions = " ".join([f"@{str(v).replace('@', '')}" for v in appeal['voters_to_mention']])
-            request_text += f"\n\nПрошу следующих участников: {mentions} предоставить свои контраргументы."
-        else:
-            request_text += f"\n\nПрошу Совет предоставить свою позицию по данному решению."
-        request_text += f"\n\nУ вас есть 24 часа. Для ответа используйте команду `/reply {case_id}` в личном чате с ботом."
-
-        try:
-            if EDITORS_CHANNEL_ID:
-                bot.send_message(EDITORS_CHANNEL_ID, request_text, parse_mode="Markdown")
-            else:
-                print("EDITORS_CHANNEL_ID не задан. Запрос контраргументов не отправлен в канал.")
-        except Exception as e:
-            print(f"Не удалось отправить запрос в EDITORS_CHANNEL_ID: {e}")
-
-        expires_at = datetime.utcnow() + timedelta(hours=24)
-        appealManager.update_appeal(case_id, 'timer_expires_at', expires_at)
-        print(f"Таймер для дела #{case_id} установлен на {expires_at.isoformat()}")
 
     # 申請者ハンドラ（council状態は除外）
     @bot.message_handler(
@@ -252,65 +233,77 @@ def register_applicant_handlers(bot, user_states):
     def handle_dialogue_messages(message):
         user_id = message.from_user.id
         state_data = user_states.get(user_id)
-        if not state_data:
-            return
+        if not state_data: return
 
         state = state_data.get('state')
         case_id = state_data.get('case_id')
+        log.debug(f"[dialog] msg user={user_id} state={state} type={message.content_type}")
 
-        # --- Сбор объектов: 通常の転送は禁止。リンク必須。CSVは許可 ---
+        # --- Сбор объектов ---
         if state == 'collecting_items':
             is_forwarded = message.forward_from or message.forward_from_chat
             is_document = message.content_type == 'document'
             is_poll = message.content_type == 'poll'
 
-            # 1) 通常の転送は禁止（丁寧に案内）
             if is_forwarded:
+                log.info(f"[collect] forwarded rejected user={user_id}")
                 bot.send_message(
                     message.chat.id,
                     "Обычные пересылки не принимаются. Пожалуйста, пришлите ссылку на сообщение (t.me/...) из приватной группы Совета."
                 )
                 return
 
-            # 2) テキスト中のリンクを解析・検証し、実体取得（ボットがそのグループに参加している必要あり）
             if message.content_type == 'text':
                 parsed = _parse_message_link(message.text)
                 if parsed:
                     from_chat_id, msg_id = parsed
+                    expected_id = _resolve_council_chat_id()
+                    log.info(f"[collect] parsed from_chat_id={from_chat_id} msg_id={msg_id} expected_id={expected_id}")
 
-                    # EDITORS_CHANNEL_ID（=COUNCIL_CHAT_ID）と一致するかを検証
-                    if COUNCIL_CHAT_ID and str(from_chat_id) != str(COUNCIL_CHAT_ID):
-                        bot.send_message(message.chat.id, "Ссылка ведет не на нашу приватную группу. Пожалуйста, пришлите корректную ссылку.")
-                        return
-
+                    # ВАЖНО: сначала пытаемся получить сообщение (подтвердить доступ и валидность)
                     try:
-                        # 実体取得: forward_message で内容を得る（成功＝真正性とアクセス確認OK）
-                        fwd = bot.forward_message(
+                        copied = bot.copy_message(
                             chat_id=message.chat.id,
                             from_chat_id=from_chat_id,
-                            message_id=msg_id,
-                            disable_notification=True
+                            message_id=msg_id
                         )
-                        # 得られたメッセージ（テキスト/ポール等）を items に保存
-                        state_data['items'].append(fwd)
-                        bot.send_message(message.chat.id, f"Ссылка подтверждена и принята ({len(state_data['items'])}). Перешлите еще или нажмите 'Готово'.")
+                        # Автокоррекция источника, если окружение отличается
+                        if expected_id is None or int(expected_id) != int(from_chat_id):
+                            _set_council_chat_id_runtime(int(from_chat_id))
+
+                        state_data['items'].append(copied)
+                        log.info(f"[collect] copy_message OK, items={len(state_data['items'])}")
+                        bot.send_message(
+                            message.chat.id,
+                            f"Ссылка подтверждена и принята ({len(state_data['items'])}). Перешлите еще или нажмите 'Готово'."
+                        )
                         return
-                    except Exception:
-                        bot.send_message(message.chat.id, "Не удалось подтвердить ссылку. Убедитесь, bahwa бот состоит в чате и ссылка корректна.")
+                    except Exception as e:
+                        log.warning(f"[collect] copy_message failed: chat_id={from_chat_id} msg_id={msg_id} err={e}")
+                        # Если копирование не удалось, и мы уверены в «нашей» группе — предупреждаем
+                        if expected_id is not None and int(from_chat_id) != int(expected_id):
+                            bot.send_message(
+                                message.chat.id,
+                                "Ссылка ведет не на нашу приватную группу. Пожалуйста, пришлите корректную ссылку."
+                            )
+                        else:
+                            bot.send_message(
+                                message.chat.id,
+                                "Не удалось подтвердить ссылку. Убедитесь, что бот состоит в чате и ссылка корректна."
+                            )
                         return
 
-            # 3) CSV は引き続き証拠として許可
             if is_document and message.document.mime_type == 'text/csv':
                 state_data['items'].append(message)
+                log.info(f"[collect] CSV accepted, items={len(state_data['items'])}")
                 bot.send_message(message.chat.id, f"CSV принят ({len(state_data['items'])}). Перешлите еще или нажмите 'Готово'.")
                 return
 
-            # 4) poll を直接送るのは不可（リンク要求）
             if is_poll:
+                log.info("[collect] poll rejected (need link)")
                 bot.send_message(message.chat.id, "Пожалуйста, пришлите ссылку на этот опрос (t.me/...), обычные пересылки и прямые опросы не принимаются.")
                 return
 
-            # 5) その他の通常テキストは案内のみ
             if message.content_type == 'text':
                 bot.send_message(message.chat.id, "Пришлите, пожалуйста, ссылку на сообщение (t.me/...) из приватной группы Совета или CSV-файл.")
             return
@@ -319,13 +312,16 @@ def register_applicant_handlers(bot, user_states):
         if state == 'awaiting_vote_response':
             appeal = appealManager.get_appeal(case_id)
             if not appeal:
+                log.warning(f"[flow] appeal not found case_id={case_id}")
                 return
-            if message.content_type == 'text' and message.text.startswith("Да"):
+            if message.content_type == 'text' and message.text.strip().lower().startswith("да"):
                 expected_responses = (appeal.get('total_voters') or 1) - 1
                 appealManager.update_appeal(case_id, 'expected_responses', expected_responses)
                 user_states[user_id]['state'] = 'awaiting_main_argument'
+                log.info(f"[flow] vote YES case_id={case_id} expected_responses={expected_responses}")
                 bot.send_message(message.chat.id, "Понятно. Теперь, пожалуйста, изложите ваши основные аргументы.", reply_markup=types.ReplyKeyboardRemove())
-            elif message.content_type == 'text' and message.text.startswith("Нет"):
+            elif message.content_type == 'text' and message.text.strip().lower().startswith("нет"):
+                log.info(f"[flow] vote NO case_id={case_id}")
                 bot.send_message(message.chat.id, "Согласно правилам, все участники должны принимать участие в голосовании. Ваша заявка отклонена.", reply_markup=types.ReplyKeyboardRemove())
                 appealManager.delete_appeal(case_id)
                 user_states.pop(user_id, None)
@@ -333,6 +329,7 @@ def register_applicant_handlers(bot, user_states):
                 bot.send_message(message.chat.id, "Пожалуйста, используйте кнопки для ответа.")
 
         elif state == 'awaiting_main_argument':
+            log.info(f"[flow] main_argument case_id={case_id} len={len(message.text or '')}")
             appealManager.update_appeal(case_id, 'applicant_arguments', message.text)
             user_states[user_id]['state'] = 'awaiting_q1'
             bot.send_message(message.chat.id, "Спасибо. Теперь ответьте, пожалуйста, на несколько уточняющих вопросов.")
@@ -344,6 +341,7 @@ def register_applicant_handlers(bot, user_states):
                 current_answers = appeal.get('applicant_answers', {}) or {}
                 current_answers['q1'] = message.text
                 appealManager.update_appeal(case_id, 'applicant_answers', current_answers)
+            log.info(f"[flow] q1 saved case_id={case_id}")
             user_states[user_id]['state'] = 'awaiting_q2'
             bot.send_message(message.chat.id, "Вопрос 2/3: Какой результат вы считаете справедливым?")
 
@@ -353,6 +351,7 @@ def register_applicant_handlers(bot, user_states):
                 current_answers = appeal.get('applicant_answers', {}) or {}
                 current_answers['q2'] = message.text
                 appealManager.update_appeal(case_id, 'applicant_answers', current_answers)
+            log.info(f"[flow] q2 saved case_id={case_id}")
             user_states[user_id]['state'] = 'awaiting_q3'
             bot.send_message(message.chat.id, "Вопрос 3/3: Есть ли дополнительный контекст, важный для дела?")
 
@@ -363,4 +362,5 @@ def register_applicant_handlers(bot, user_states):
                 current_answers['q3'] = message.text
                 appealManager.update_appeal(case_id, 'applicant_answers', current_answers)
             user_states.pop(user_id, None)  # Завершаем диалог с заявителем
+            log.info(f"[flow] q3 saved; dialog closed case_id={case_id}")
             request_counter_arguments(bot, case_id)
