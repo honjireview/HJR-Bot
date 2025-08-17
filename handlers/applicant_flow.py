@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-Обработчики подачи апелляции. Ведёт диалог со пользователем, собирает ссылки/аргументы,
-создаёт заявку через appealManager и делегирует проверку источника + отправку запроса в council_helpers.
+Обработчики подачи апелляции. Делегирует парсинг ссылок и операции с Telegram
+в handlers.parse_link и handlers.telegram_helpers. При обработке ссылок:
+- пытаемся скопировать/переслать сообщение (copy/forward) — если успешно, принимаем ссылку;
+- если copy/forward не удался — показываем подробную ошибку и предлагаем действия.
 """
 import logging
 import random
@@ -13,9 +15,10 @@ import appealManager
 
 from .parse_link import parse_message_link
 from .telegram_helpers import get_chat_safe, copy_or_forward_message
-from .council_helpers import is_link_from_council, request_counter_arguments
+from .council_helpers import is_link_from_council, resolve_council_id, request_counter_arguments
 
 log = logging.getLogger("hjr-bot.applicant_flow")
+
 
 def register_applicant_handlers(bot, user_states: dict):
     """
@@ -155,6 +158,7 @@ def register_applicant_handlers(bot, user_states: dict):
         state = state_data.get("state")
         case_id = state_data.get("case_id")
 
+        # --- собираем ссылки/сообщения ---
         if state == "collecting_items":
             if message.content_type == "text":
                 parsed = parse_message_link(message.text)
@@ -162,14 +166,58 @@ def register_applicant_handlers(bot, user_states: dict):
                     from_chat_id, msg_id = parsed
                     log.info(f"[collect] parsed from_chat_id={from_chat_id} msg_id={msg_id}")
 
-                    # Проверяем, что ссылка из нужного чата/канала (если EDITORS_CHANNEL_ID задан)
-                    if not is_link_from_council(bot, from_chat_id):
-                        resolved = None
-                        try:
-                            from .council_helpers import resolve_council_id
+                    # Попытка получить объект чата (информативно)
+                    parsed_chat = get_chat_safe(bot, from_chat_id)
+                    if not parsed_chat:
+                        # Если бот не может получить чат — предложить добавить бота
+                        log.info(f"[collect] bot cannot get_chat for parsed {from_chat_id}")
+                        bot.send_message(
+                            message.chat.id,
+                            "Не удалось получить сообщение по ссылке. Пожалуйста, добавьте бота (@hjrmainbot) в приватную группу/канал, "
+                            "чтобы он мог получить сообщение, и попробуйте снова.",
+                            reply_markup=types.ReplyKeyboardRemove()
+                        )
+                        return
+
+                    # Попытка copy/forward — делаем это в первую очередь (так было в рабочем варианте раньше)
+                    msg_obj = None
+                    try:
+                        msg_obj = copy_or_forward_message(bot, message.chat.id, from_chat_id, msg_id)
+                    except Exception as e:
+                        log.warning(f"[collect] copy_or_forward raised unexpected error: {e}")
+
+                    if msg_obj:
+                        # Приняли ссылку — сохраняем объект
+                        state_data["items"].append(msg_obj)
+                        log.info(f"[collect] accepted (copied/forwarded), items={len(state_data['items'])}")
+
+                        # Если ссылка не совпадает со строго заданным EDITORS_CHANNEL_ID — логируем и уведомляем,
+                        # но не отвергаем, т.к. успешный copy/forward означает доступ бота к сообщению.
+                        if not is_link_from_council(bot, from_chat_id):
                             resolved = resolve_council_id()
-                        except Exception:
-                            pass
+                            log.warning(f"[collect] link from unexpected chat: parsed={from_chat_id} resolved={resolved}")
+                            try:
+                                bot.send_message(
+                                    message.chat.id,
+                                    "Ссылка принята, но она указывает на чат/канал, отличный от основного канала Совета. "
+                                    "Если это ошибка — проверьте EDITORS_CHANNEL_ID. (Ссылка всё же принята, т.к. бот смог получить сообщение.)",
+                                    reply_markup=types.ReplyKeyboardRemove()
+                                )
+                            except Exception:
+                                pass
+                        else:
+                            # Обычное подтверждение
+                            try:
+                                bot.send_message(message.chat.id, f"Ссылка подтверждена и принята ({len(state_data['items'])}).", reply_markup=types.ReplyKeyboardRemove())
+                            except Exception:
+                                pass
+                        return
+
+                    # Если не удалось скопировать/переслать — тогда даём подробное объяснение и проверяем соответствие каналу
+                    log.info(f"[collect] copy/forward failed for {from_chat_id}/{msg_id}")
+                    # Если ссылка явно не из нужного чата, даём информативное сообщение
+                    if not is_link_from_council(bot, from_chat_id):
+                        resolved = resolve_council_id()
                         log.info(f"[collect] link rejected: parsed={from_chat_id} resolved={resolved}")
                         try:
                             if resolved:
@@ -183,45 +231,31 @@ def register_applicant_handlers(bot, user_states: dict):
                             else:
                                 bot.send_message(
                                     message.chat.id,
-                                    "Ссылка должна вести на сообщение из приватной группы/канала Совета. Пожалуйста, пришлите ссылку из правильного места.",
+                                    "Не удалось получить сообщение по ссылке. Убедитесь, что бот добавлен в группу/канал и что ссылка корректна.",
                                     reply_markup=types.ReplyKeyboardRemove()
                                 )
                         except Exception:
                             pass
                         return
-
-                    # Проверка доступа к чату до копирования
-                    parsed_chat = get_chat_safe(bot, from_chat_id)
-                    if not parsed_chat:
-                        bot.send_message(
-                            message.chat.id,
-                            "Не удалось получить сообщение по ссылке. Пожалуйста, добавьте бота (@hjrmainbot) в приватную группу/канал, "
-                            "чтобы он мог получить сообщение, и попробуйте снова.",
-                            reply_markup=types.ReplyKeyboardRemove()
-                        )
-                        return
-
-                    # Попытка copy/forward
-                    msg_obj = copy_or_forward_message(bot, message.chat.id, from_chat_id, msg_id)
-                    if msg_obj:
-                        state_data["items"].append(msg_obj)
-                        log.info(f"[collect] accepted, items={len(state_data['items'])}")
-                        bot.send_message(message.chat.id, f"Ссылка подтверждена и принята ({len(state_data['items'])}).", reply_markup=types.ReplyKeyboardRemove())
-                        return
                     else:
+                        # Ссылка вроде бы из нужного чата, но copy/forward не сработал — даём рекомендации
                         bot.send_message(
                             message.chat.id,
-                            "Не удалось получить сообщение по ссылке. Убедитесь, что:\n"
-                            "- вы дали боту доступ к этой группе/каналу (добавьте @hjrmainbot),\n"
-                            "- ссылка корректна (t.me/... ), и\n"
-                            "- сообщение с таким id существует.\n\nПосле добавления бота повторите попытку.",
+                            "Не удалось получить сообщение по ссылке, хотя ссылка ведёт в ожидаемый чат. Возможно, бот был удалён из группы/канала или у него нет прав на чтение. "
+                            "Пожалуйста, проверьте права бота и повторите попытку.",
                             reply_markup=types.ReplyKeyboardRemove()
                         )
                         return
 
-            bot.send_message(message.chat.id, "Пришлите, пожалуйста, ссылку на сообщение (t.me/...), только из приватной группы/канала Совета.", reply_markup=types.ReplyKeyboardRemove())
+            # не распознана ссылка как t.me/...
+            bot.send_message(
+                message.chat.id,
+                "Пришлите, пожалуйста, ссылку на сообщение (t.me/...), только из приватной группы/канала Совета.",
+                reply_markup=types.ReplyKeyboardRemove()
+            )
             return
 
+        # --- вопросы/логика после принятия ссылок ---
         elif state == "awaiting_vote_response":
             appeal = appealManager.get_appeal(case_id)
             if not appeal:
