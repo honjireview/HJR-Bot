@@ -6,7 +6,6 @@ import os
 import appealManager
 import geminiProcessor
 
-# Получаем ID каналов напрямую из переменных окружения
 EDITORS_CHANNEL_ID = os.getenv('EDITORS_CHANNEL_ID')
 APPEALS_CHANNEL_ID = os.getenv('APPEALS_CHANNEL_ID')
 
