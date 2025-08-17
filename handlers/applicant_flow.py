@@ -1,9 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-Обработчики подачи апелляции. Поведение согласовано с рабочим коммитом:
-- при получении ссылки пытаемся copy_message (fallback forward); если успешно — принимаем ссылку;
-  если ожидаемое EDITORS_CHANNEL_ID отличается — ставим runtime override через set_council_chat_id_runtime;
-- если copy/forward не удался — выполняем строгую проверку соответствия чата и даём понятную ошибку.
+Обработчики подачи апелляции. Адаптирован под новый copy_or_forward_message,
+который возвращает dict с извлечённым содержимым сообщения.
 """
 import logging
 import random
@@ -25,11 +23,45 @@ from .council_helpers import (
 log = logging.getLogger("hjr-bot.applicant_flow")
 
 
-def register_applicant_handlers(bot, user_states: dict):
+def _render_item_text(item) -> str:
     """
-    Регистрирует обработчики. user_states — словарь user_id -> dict(state=..., items=[...], case_id...)
+    Собирает человекочитаемый текст из возвращённого объекта item (dict) или Message-like.
     """
+    if not item:
+        return ""
 
+    # если это dict из copy_or_forward_message
+    if isinstance(item, dict):
+        # poll
+        if item.get("type") == "poll" or item.get("poll"):
+            p = item.get("poll") or {}
+            q = p.get("question", "")
+            opts = p.get("options", []) or []
+            opts_text = "\n".join([f"- {o.get('text','')}: {o.get('voter_count',0)} голосов" for o in opts])
+            return f"--- Опрос ---\nВопрос: {q}\n{opts_text}"
+        # text / caption / media caption
+        txt = item.get("text") or ""
+        if txt:
+            return f"--- Сообщение ---\n{txt}"
+        # если нет текста, но есть media key, просто note
+        if item.get("media"):
+            return f"--- Медиа сообщение (без текста) ---"
+        return ""
+
+    # fallback — объект telebot.types.Message (старые варианты)
+    try:
+        poll = getattr(item, "poll", None)
+        if poll:
+            options_text = "\n".join([f"- {opt.text}: {getattr(opt, 'voter_count', 0)} голосов" for opt in poll.options])
+            return f"--- Опрос ---\nВопрос: {poll.question}\n{options_text}"
+        text = getattr(item, "text", None) or getattr(item, "caption", None)
+        if text:
+            return f"--- Сообщение ---\n{text}"
+    except Exception:
+        pass
+    return ""
+
+def register_applicant_handlers(bot, user_states: dict):
     @bot.message_handler(commands=["start"])
     def send_welcome(message):
         user_states.pop(message.from_user.id, None)
@@ -93,30 +125,20 @@ def register_applicant_handlers(bot, user_states: dict):
         if not state_data:
             return
 
-        full_decision_text, poll_count, total_voters = "", 0, None
+        full_decision_text = ""
+        poll_count = 0
+        total_voters = None
         for item in state_data["items"]:
-            poll = getattr(item, "poll", None)
-            text = getattr(item, "text", None)
-            if poll:
+            # возможные форматы item: dict (новый), telebot.Message (старый)
+            rendered = _render_item_text(item)
+            if rendered.startswith("--- Опрос"):
                 poll_count += 1
-                total_voters = getattr(poll, "total_voter_count", total_voters)
-                options_text = "\n".join([f"- {opt.text}: {getattr(opt, 'voter_count', 0)} голосов" for opt in poll.options])
-                full_decision_text += f"\n\n--- Опрос ---\nВопрос: {poll.question}\n{options_text}"
-            elif text:
-                full_decision_text += f"\n\n--- Сообщение ---\n{text}"
-            else:
-                try:
-                    if isinstance(item, dict):
-                        if "poll" in item:
-                            p = item["poll"]
-                            poll_count += 1
-                            total_voters = p.get("total_voter_count", total_voters)
-                            options_text = "\n".join([f"- {opt.get('text','')}: {opt.get('voter_count',0)} голосов" for opt in p.get("options",[])])
-                            full_decision_text += f"\n\n--- Опрос ---\nВопрос: {p.get('question','')}\n{options_text}"
-                        if "text" in item:
-                            full_decision_text += f"\n\n--- Сообщение ---\n{item.get('text','')}"
-                except Exception:
-                    pass
+                # попытка достать total_voter_count если есть (dict)
+                if isinstance(item, dict) and item.get("poll", {}).get("total_voter_count") is not None:
+                    total_voters = item.get("poll", {}).get("total_voter_count")
+                full_decision_text += "\n\n" + rendered
+            elif rendered:
+                full_decision_text += "\n\n" + rendered
 
         if poll_count > 1:
             bot.send_message(message.chat.id, "Ошибка: Вы можете оспорить только одно голосование за раз. Начните заново: /start")
@@ -183,7 +205,7 @@ def register_applicant_handlers(bot, user_states: dict):
                         )
                         return
 
-                    # Попытка copy/forward — сначала пытаемся получить сообщение
+                    # Попытка copy/forward — сперва пытаемся получить сообщение и извлечь содержимое
                     msg_obj = None
                     try:
                         msg_obj = copy_or_forward_message(bot, message.chat.id, from_chat_id, msg_id)
@@ -191,7 +213,7 @@ def register_applicant_handlers(bot, user_states: dict):
                         log.warning(f"[collect] copy_or_forward raised unexpected error: {e}")
 
                     if msg_obj:
-                        # Приняли ссылку — сохраняем объект
+                        # Приняли ссылку — сохраняем структуру (dict) с содержимым
                         state_data["items"].append(msg_obj)
                         log.info(f"[collect] accepted (copied/forwarded), items={len(state_data['items'])}")
 
@@ -250,7 +272,7 @@ def register_applicant_handlers(bot, user_states: dict):
             # не распознана ссылка как t.me/...
             bot.send_message(
                 message.chat.id,
-                "Пришлите, пожалуйста, ссылку на сообщение (t.me/...), только из приватной группы/канала Совета.",
+                "Пришлите, пожалуйста, ссылку на сообщение (t.me/...), только из приватной группе/канале Совета.",
                 reply_markup=types.ReplyKeyboardRemove()
             )
             return
