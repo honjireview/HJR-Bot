@@ -5,6 +5,7 @@
 
 from . import applicant_flow
 from . import council_flow
+from . import textcrafter_flow
 
 # Словарь для отслеживания состояния пользователей.
 # Он будет общим для всех модулей обработчиков.
@@ -16,3 +17,4 @@ def register_all_handlers(bot):
     """
     applicant_flow.register_applicant_handlers(bot, user_states)
     council_flow.register_council_handlers(bot, user_states)
+    textcrafter_flow.register_textcrafter_handlers(bot, user_states)
