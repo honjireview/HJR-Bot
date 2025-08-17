@@ -4,3 +4,4 @@ pandas
 psycopg[binary]
 Flask
 gunicorn
+python-dotenv
