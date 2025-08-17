@@ -243,10 +243,17 @@ def register_applicant_handlers(bot, user_states):
                             message_id=msg_id,
                             disable_notification=True
                         )
-                        state_data['items'].append(fwd)
+                        # ВАЖНО: используем copy_message, чтобы получить содержимое по message_id из приватной группы
+                        copied = bot.copy_message(
+                            chat_id=message.chat.id,
+                            from_chat_id=from_chat_id,
+                            message_id=msg_id
+                        )
+                        state_data['items'].append(copied)
                         bot.send_message(message.chat.id, f"Ссылка подтверждена и принята ({len(state_data['items'])}). Перешлите еще или нажмите 'Готово'.")
                         return
-                    except Exception:
+                    except Exception as e:
+                        log.warning(f"[copy_message] failed: {e}")
                         bot.send_message(message.chat.id, "Не удалось подтвердить ссылку. Убедитесь, что бот состоит в чате и ссылка корректна.")
                         return
 
