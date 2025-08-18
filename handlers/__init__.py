@@ -65,6 +65,13 @@ https://github.com/honjireview/HJR-Bot
 """
         bot.send_message(message.chat.id, help_text, disable_web_page_preview=True)
 
+    # --- НОВЫЙ ОБРАБОТЧИК ДЛЯ КОМАНДЫ /getid ---
+    @bot.message_handler(commands=['getid'])
+    def send_chat_id(message):
+        chat_id = message.chat.id
+        bot.reply_to(message, f"ID этого чата: `{chat_id}`")
+
+
     # Регистрация остальных обработчиков
     applicant_flow.register_applicant_handlers(bot, user_states)
     council_flow.register_council_handlers(bot, user_states)
