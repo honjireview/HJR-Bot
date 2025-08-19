@@ -10,7 +10,6 @@ import connectionChecker
 from handlers.council_helpers import resolve_council_id
 
 def _get_conn():
-    # ... (код без изменений)
     conn = connectionChecker.db_conn
     if conn is None or conn.closed:
         if connectionChecker.check_db_connection():
@@ -19,8 +18,8 @@ def _get_conn():
             raise RuntimeError("Не удалось восстановить соединение с БД.")
     return conn
 
+# ... (все функции до log_interaction остаются без изменений) ...
 def create_appeal(case_id, initial_data):
-    # ... (код без изменений)
     try:
         conn = _get_conn()
         with conn.cursor() as cur:
@@ -45,7 +44,6 @@ def create_appeal(case_id, initial_data):
         print(f"[ОШИБКА] Не удалось создать апелляцию #{case_id}: {e}")
 
 def get_appeal(case_id):
-    # ... (код без изменений)
     try:
         conn = _get_conn()
         with conn.cursor() as cur:
@@ -59,7 +57,6 @@ def get_appeal(case_id):
     return None
 
 def update_appeal(case_id, key, value):
-    # ... (код без изменений)
     try:
         conn = _get_conn()
         with conn.cursor() as cur:
@@ -74,7 +71,6 @@ def update_appeal(case_id, key, value):
         print(f"[ОШИБКА] Не удалось обновить дело #{case_id} (поле {key}): {e}")
 
 def add_council_answer(case_id, answer_data):
-    # ... (код без изменений)
     try:
         appeal = get_appeal(case_id)
         if appeal:
@@ -85,7 +81,6 @@ def add_council_answer(case_id, answer_data):
         print(f"[ОШИБКА] Не удалось добавить ответ в дело #{case_id}: {e}")
 
 def delete_appeal(case_id):
-    # ... (код без изменений)
     try:
         conn = _get_conn()
         with conn.cursor() as cur:
@@ -95,7 +90,6 @@ def delete_appeal(case_id):
         print(f"[ОШИБКА] Не удалось удалить дело #{case_id}: {e}")
 
 def get_expired_appeals():
-    # ... (код без изменений)
     try:
         conn = _get_conn()
         with conn.cursor() as cur:
@@ -109,7 +103,6 @@ def get_expired_appeals():
     return []
 
 def get_active_appeal_by_user(user_id):
-    # ... (код без изменений)
     try:
         conn = _get_conn()
         with conn.cursor() as cur:
@@ -124,7 +117,6 @@ def get_active_appeal_by_user(user_id):
     return None
 
 def get_user_state(user_id):
-    # ... (код без изменений)
     try:
         conn = _get_conn()
         with conn.cursor() as cur:
@@ -137,7 +129,6 @@ def get_user_state(user_id):
     return None
 
 def set_user_state(user_id, state, data=None):
-    # ... (код без изменений)
     try:
         conn = _get_conn()
         with conn.cursor() as cur:
@@ -156,7 +147,6 @@ def set_user_state(user_id, state, data=None):
         print(f"[ОШИБКА] Не удалось установить состояние для user_id {user_id}: {e}")
 
 def delete_user_state(user_id):
-    # ... (код без изменений)
     try:
         conn = _get_conn()
         with conn.cursor() as cur:
@@ -165,7 +155,6 @@ def delete_user_state(user_id):
     except Exception as e:
         print(f"[ОШИБКА] Не удалось удалить состояние для user_id {user_id}: {e}")
 
-# --- НОВАЯ ВЕРСИЯ: Проверка членства в реальном времени ---
 def is_user_an_editor(bot, user_id):
     """Проверяет, является ли пользователь участником чата редакторов."""
     chat_id = resolve_council_id()
@@ -174,25 +163,25 @@ def is_user_an_editor(bot, user_id):
         return False
     try:
         member = bot.get_chat_member(chat_id, user_id)
-        # Участником считается любой, кроме тех, кто вышел или был забанен
         return member.status in ['creator', 'administrator', 'member']
     except Exception as e:
-        # Если API возвращает ошибку (например, "user not found"), значит, он не участник
         print(f"[AUTH] Ошибка при проверке членства для user_id {user_id}: {e}")
         return False
 
-# --- ИЗМЕНЕНИЕ: Функция теперь возвращает ID лога ---
 def log_interaction(user_id, action, case_id=None, details=""):
     """Записывает действие в лог и возвращает ID этой записи."""
     try:
         conn = _get_conn()
         with conn.cursor() as cur:
+            # --- КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: Обрабатываем "SYSTEM" как NULL ---
+            db_user_id = user_id if user_id != "SYSTEM" else None
+
             cur.execute(
                 """
                 INSERT INTO interaction_logs (user_id, case_id, action, details)
                 VALUES (%s, %s, %s, %s) RETURNING log_id;
                 """,
-                (user_id, case_id, action, details)
+                (db_user_id, case_id, action, details)
             )
             log_id = cur.fetchone()[0]
             conn.commit()
