@@ -24,6 +24,11 @@ def finalize_appeal(case_id, bot):
     и отправляет результаты в чаты.
     """
     log.info(f"Начало финального рассмотрения дела #{case_id}")
+    appeal = appealManager.get_appeal(case_id)
+    if not appeal or appeal.get('status') != 'collecting':
+        log.warning(f"Попытка повторно или преждевременно завершить дело #{case_id}. Текущий статус: {appeal.get('status')}")
+        return
+
     appealManager.update_appeal(case_id, "status", "processing")
     verdict = geminiProcessor.get_verdict_from_gemini(case_id)
     appealManager.update_appeal(case_id, "ai_verdict", verdict)
@@ -41,32 +46,25 @@ def finalize_appeal(case_id, bot):
         log.error(f"Ошибка при отправке вердикта по делу #{case_id}: {e}")
 
 def register_council_handlers(bot):
-    # --- КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: Команда /reply теперь работает только в ЛС ---
     @bot.message_handler(commands=['reply'], chat_types=['private'])
     def handle_reply_command(message):
         user_id = message.from_user.id
         log.info(f"[COUNCIL_FLOW] Received /reply command from user {user_id} in private chat.")
-
         m = REPLY_CMD_RE.search(message.text)
         if not m:
             bot.reply_to(message, "Пожалуйста, укажите номер дела после команды, например: `/reply 12345`", parse_mode="Markdown")
             return
-
         case_id = int(m.group(1))
         appeal = appealManager.get_appeal(case_id)
         if not appeal:
             bot.reply_to(message, f"Дело с номером #{case_id} не найдено.")
             return
-
         if appeal.get('status') != 'collecting':
             bot.reply_to(message, f"Сбор контраргументов по делу #{case_id} уже завершен.")
             return
-
-        # Начинаем диалог с редактором
         appealManager.set_user_state(user_id, CouncilStates.AWAITING_MAIN_ARG, data={"case_id": case_id})
         bot.send_message(user_id, f"Вы отвечаете по делу #{case_id}. Пожалуйста, изложите ваши основные контраргументы.")
         log.info(f"[FSM-Council] Editor {user_id} started reply for case #{case_id}.")
-
 
     @bot.message_handler(
         func=lambda message: appealManager.get_user_state(message.from_user.id) is not None and str(appealManager.get_user_state(message.from_user.id).get('state', '')).startswith("council_") and message.chat.type == 'private'
@@ -77,34 +75,35 @@ def register_council_handlers(bot):
         state = state_data.get("state")
         data = state_data.get("data", {})
         case_id = data.get("case_id")
-
         if not case_id:
             appealManager.delete_user_state(user_id)
             return
 
         responder_info = f"Ответ от {message.from_user.first_name} (@{message.from_user.username or 'скрыто'})"
-
         if state == CouncilStates.AWAITING_MAIN_ARG:
             data["main_arg"] = message.text
             appealManager.set_user_state(user_id, CouncilStates.AWAITING_Q1, data)
             log.info(f"[FSM-Council] Editor {user_id}, case #{case_id}: Got main arg. Moving to AWAITING_Q1.")
             bot.send_message(message.chat.id, "Вопрос 1/2: На каких пунктах устава основано ваше решение?")
-
         elif state == CouncilStates.AWAITING_Q1:
             data["q1"] = message.text
             appealManager.set_user_state(user_id, CouncilStates.AWAITING_Q2, data)
             log.info(f"[FSM-Council] Editor {user_id}, case #{case_id}: Got Q1. Moving to AWAITING_Q2.")
             bot.send_message(message.chat.id, "Вопрос 2/2: Как вы оцениваете аргументы заявителя?")
-
         elif state == CouncilStates.AWAITING_Q2:
             data["q2"] = message.text
-            answer_data = {
-                "responder_info": responder_info,
-                "main_arg": data.get("main_arg"),
-                "q1": data.get("q1"),
-                "q2": data.get("q2")
-            }
+            answer_data = { "responder_info": responder_info, "main_arg": data.get("main_arg"), "q1": data.get("q1"), "q2": data.get("q2") }
             appealManager.add_council_answer(case_id, answer_data)
             appealManager.delete_user_state(user_id)
             log.info(f"[FSM-Council] Editor {user_id}, case #{case_id}: Got Q2. Dialog finished.")
             bot.send_message(message.chat.id, f"Спасибо, ваш ответ по делу #{case_id} принят.")
+
+            # --- ИЗМЕНЕНИЕ: Проверка на досрочное завершение ---
+            updated_appeal = appealManager.get_appeal(case_id)
+            if updated_appeal:
+                num_answers = len(updated_appeal.get('council_answers', []))
+                expected_responses = updated_appeal.get('expected_responses')
+                log.info(f"[FINALIZE_CHECK] Case #{case_id}: Received {num_answers} answers, expecting {expected_responses}.")
+                if expected_responses is not None and num_answers >= expected_responses:
+                    log.info(f"[FINALIZE_CHECK] All responses for case #{case_id} collected. Finalizing early.")
+                    finalize_appeal(case_id, bot)

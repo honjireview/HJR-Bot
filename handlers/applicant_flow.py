@@ -40,6 +40,12 @@ def register_applicant_handlers(bot):
     @bot.message_handler(commands=["start"], chat_types=['private'])
     def send_welcome(message):
         user_id = message.from_user.id
+
+        # --- ИЗМЕНЕНИЕ: Проверяем, не находится ли пользователь уже в диалоге ---
+        if appealManager.get_user_state(user_id) is not None:
+            bot.send_message(message.chat.id, "Вы уже находитесь в процессе подачи апелляции. Чтобы начать заново, сначала отмените текущий процесс командой /cancel.")
+            return
+
         log.info(f"[FSM] User {user_id} initiated /start. Resetting state.")
         appealManager.delete_user_state(user_id)
         appealManager.log_interaction(user_id, "command_start")
@@ -70,7 +76,6 @@ def register_applicant_handlers(bot):
         except Exception: pass
         bot.send_message(call.message.chat.id, "Пожалуйста, пришлите ссылку на сообщение или опрос...")
 
-    # --- КЛЮЧЕВОЕ ИЗМЕНЕНИЕ ЗДЕСЬ ---
     @bot.message_handler(
         func=lambda message: (
                 appealManager.get_user_state(message.from_user.id) is not None and
@@ -170,11 +175,12 @@ def register_applicant_handlers(bot):
 
         if action == "vote_yes":
             total_voters = appeal.get("total_voters")
-            if total_voters is not None and total_voters > 0:
-                appealManager.update_appeal(case_id, "total_voters", total_voters - 1)
-            appealManager.log_interaction(user_id, "confirmed_vote", case_id, "Vote count adjusted.")
+            expected_responses = total_voters - 1 if total_voters is not None and total_voters > 0 else 0
+            appealManager.update_appeal(case_id, "expected_responses", expected_responses)
+            appealManager.log_interaction(user_id, "confirmed_vote", case_id, f"Vote count adjusted. Expected responses: {expected_responses}")
             bot.send_message(call.message.chat.id, "Понятно. Ваш голос будет вычтен из общего числа для объективности.")
         elif action == "vote_no":
+            appealManager.update_appeal(case_id, "expected_responses", appeal.get("total_voters", 0))
             appealManager.log_interaction(user_id, "denied_vote", case_id)
             bot.send_message(call.message.chat.id, "Понятно. Информация принята.")
 
