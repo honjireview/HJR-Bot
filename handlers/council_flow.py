@@ -1,7 +1,4 @@
 # -*- coding: utf-8 -*-
-"""
-Обработчики и логика для потока Совета Редакторов.
-"""
 import logging
 import re
 import os
@@ -33,7 +30,8 @@ def finalize_appeal(case_id, bot):
     appealManager.update_appeal(case_id, "verdict_log_id", verdict_log_id)
     appealManager.update_appeal(case_id, "commit_hash", COMMIT_HASH)
 
-    verdict = geminiProcessor.get_verdict_from_gemini(case_id)
+    # --- ИСПРАВЛЕНИЕ: Передаем commit_hash и log_id в Gemini ---
+    verdict = geminiProcessor.get_verdict_from_gemini(case_id, COMMIT_HASH, verdict_log_id)
     appealManager.update_appeal(case_id, "ai_verdict", verdict)
     appealManager.update_appeal(case_id, "status", "closed")
 
@@ -46,9 +44,7 @@ def finalize_appeal(case_id, bot):
             bot.send_message(editors_chat_id, f"Дело #{case_id} закрыто.\n\n{verdict}")
         if APPEALS_CHANNEL_ID:
             bot.send_message(APPEALS_CHANNEL_ID, verdict)
-        else:
-            log.warning(f"APPEALS_CHANNEL_ID не задан. Вердикт по делу #{case_id} не будет опубликован.")
-        log.info(f"Вердикт по делу #{case_id} успешно отправлен во все каналы.")
+        log.info(f"Вердикт по делу #{case_id} успешно отправлен.")
     except Exception as e:
         log.error(f"Ошибка при отправке вердикта по делу #{case_id}: {e}")
 
@@ -57,11 +53,7 @@ def register_council_handlers(bot):
     def handle_reply_command(message):
         user_id = message.from_user.id
 
-        # --- ИСПРАВЛЕНИЕ: Передаем 'bot' в функцию авторизации ---
-        is_editor = appealManager.is_user_an_editor(bot, user_id)
-        log.info(f"[AUTH] User {user_id} initiated /reply. Editor status: {is_editor}.")
-
-        if not is_editor:
+        if not appealManager.is_user_an_editor(user_id):
             return
 
         m = REPLY_CMD_RE.search(message.text)
@@ -87,7 +79,6 @@ def register_council_handlers(bot):
     def handle_council_dialogue(message):
         user_id = message.from_user.id
         state_data = appealManager.get_user_state(user_id)
-        state = state_data.get("state")
         data = state_data.get("data", {})
         case_id = data.get("case_id")
         if not case_id:
@@ -95,15 +86,15 @@ def register_council_handlers(bot):
             return
 
         responder_info = f"Ответ от {message.from_user.first_name} (@{message.from_user.username or 'скрыто'})"
-        if state == CouncilStates.AWAITING_MAIN_ARG:
+        if state_data.get("state") == CouncilStates.AWAITING_MAIN_ARG:
             data["main_arg"] = message.text
             appealManager.set_user_state(user_id, CouncilStates.AWAITING_Q1, data)
             bot.send_message(message.chat.id, "Вопрос 1/2: На каких пунктах устава основано ваше решение?")
-        elif state == CouncilStates.AWAITING_Q1:
+        elif state_data.get("state") == CouncilStates.AWAITING_Q1:
             data["q1"] = message.text
             appealManager.set_user_state(user_id, CouncilStates.AWAITING_Q2, data)
             bot.send_message(message.chat.id, "Вопрос 2/2: Как вы оцениваете аргументы заявителя?")
-        elif state == CouncilStates.AWAITING_Q2:
+        elif state_data.get("state") == CouncilStates.AWAITING_Q2:
             data["q2"] = message.text
             answer_data = { "responder_info": responder_info, "main_arg": data.get("main_arg"), "q1": data.get("q1"), "q2": data.get("q2") }
             appealManager.add_council_answer(case_id, answer_data)
