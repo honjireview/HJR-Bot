@@ -49,35 +49,33 @@ def _extract_message_content(message) -> Dict[str, Any]:
 
     return content
 
-def copy_or_forward_message(bot, dest_chat_id: Union[int, str], from_chat_id: Union[int, str], message_id: int) -> Optional[Dict[str, Any]]:
+def copy_and_extract_message(bot, dest_chat_id: Union[int, str], from_chat_id: Union[int, str], message_id: int) -> Optional[Dict[str, Any]]:
     """
-    Пытается скопировать сообщение, извлекает его содержимое и удаляет копию.
+    Копирует сообщение в dest_chat_id (безопасное место), извлекает содержимое и немедленно удаляет копию.
     Возвращает словарь с содержимым или None при неудаче.
     """
     copied_message = None
     try:
-        # Копируем в тот же чат, откуда пришла ссылка, чтобы не спамить пользователю
         copied_message = bot.copy_message(chat_id=dest_chat_id, from_chat_id=from_chat_id, message_id=message_id)
         content = _extract_message_content(copied_message)
         return content
     except Exception as e:
-        log.warning(f"[tg] copy_message failed ({from_chat_id}/{message_id}): {e}")
+        log.error(f"[tg] copy_message failed ({from_chat_id}/{message_id}) -> {dest_chat_id}: {e}")
         return None
     finally:
+        # Гарантированно пытаемся удалить временное сообщение, чтобы не спамить пользователю
         if copied_message:
             try:
                 bot.delete_message(chat_id=dest_chat_id, message_id=copied_message.message_id)
             except Exception:
+                # Ошибка удаления не критична
                 pass
 
 
-def validate_appeal_link(bot, url: str) -> (bool, Union[str, Dict]):
+def validate_appeal_link(bot, url: str, user_chat_id: int) -> (bool, Union[str, Dict]):
     """
     Комплексная проверка ссылки для апелляции.
-    1. Проверяет формат ссылки.
-    2. Проверяет, что ссылка ведет на канал Совета.
-    3. Пытается получить содержимое поста.
-    4. Проверяет, что пост не является медиа.
+    Использует чат с пользователем как временное место для копирования сообщения.
     Возвращает (успех, данные/ошибка).
     """
     # Шаг 1: Парсинг ссылки
@@ -92,10 +90,8 @@ def validate_appeal_link(bot, url: str) -> (bool, Union[str, Dict]):
     if required_chat and not is_link_from_council(bot, from_chat):
         return False, f"Эта ссылка ведет не на канал редакторов. Ожидался ID, соответствующий '{required_chat}'."
 
-    # Шаг 3: Получение содержимого
-    # ВАЖНО: Копируем сообщение в чат самого канала, чтобы не беспокоить пользователя
-    # и чтобы у бота точно были права.
-    content = copy_or_forward_message(bot, dest_chat_id=from_chat, from_chat_id=from_chat, message_id=msg_id)
+    # Шаг 3: Получение содержимого через безопасное копирование
+    content = copy_and_extract_message(bot, dest_chat_id=user_chat_id, from_chat_id=from_chat, message_id=msg_id)
     if not content:
         return False, "Не удалось получить содержимое сообщения. Убедитесь, что бот добавлен в канал/группу и имеет права на чтение сообщений."
 

@@ -9,7 +9,7 @@ from telebot import types
 
 import appealManager
 from .parse_link import parse_message_link
-from .telegram_helpers import validate_appeal_link  # Импортируем новую функцию-валидатор
+from .telegram_helpers import validate_appeal_link
 from .council_helpers import request_counter_arguments
 
 log = logging.getLogger("hjr-bot.applicant_flow")
@@ -25,7 +25,7 @@ class AppealStates:
 
 def register_applicant_handlers(bot):
 
-    @bot.message_handler(commands=["start"])
+    @bot.message_handler(commands=["start"], chat_types=['private'])
     def send_welcome(message):
         user_id = message.from_user.id
         appealManager.delete_user_state(user_id) # Очищаем предыдущее состояние
@@ -40,7 +40,7 @@ def register_applicant_handlers(bot):
             reply_markup=markup
         )
 
-    @bot.message_handler(commands=["cancel"])
+    @bot.message_handler(commands=["cancel"], chat_types=['private'])
     def cancel_process(message):
         user_id = message.from_user.id
         state = appealManager.get_user_state(user_id)
@@ -67,7 +67,7 @@ def register_applicant_handlers(bot):
 
     # --- Основной обработчик FSM ---
     @bot.message_handler(
-        func=lambda message: appealManager.get_user_state(message.from_user.id) is not None,
+        func=lambda message: appealManager.get_user_state(message.from_user.id) is not None and message.chat.type == 'private',
         content_types=['text']
     )
     def handle_fsm_messages(message):
@@ -80,7 +80,8 @@ def register_applicant_handlers(bot):
         # --- Этап 1: Ожидание и проверка ссылки ---
         if state == AppealStates.WAITING_FOR_LINK:
             link = message.text
-            is_valid, result = validate_appeal_link(bot, link)
+            # Передаем ID личного чата для безопасного копирования
+            is_valid, result = validate_appeal_link(bot, link, user_chat_id=message.chat.id)
 
             if not is_valid:
                 bot.reply_to(message, f"Ошибка: {result}")
@@ -98,7 +99,7 @@ def register_applicant_handlers(bot):
 
             initial_appeal_data = {
                 "applicant_chat_id": message.chat.id,
-                "decision_text": content_data.get("text", "") or content_data.get("poll", {}).get("question", ""),
+                "decision_text": content_data.get("text") or content_data.get("poll", {}).get("question", ""),
                 "total_voters": content_data.get("poll", {}).get("total_voter_count"),
                 "status": "collecting",
             }
@@ -174,8 +175,6 @@ def register_applicant_handlers(bot):
             bot.send_message(call.message.chat.id, "Понятно. Ваш голос будет вычтен из общего числа для объективности.")
         elif action == "vote_no":
             appealManager.log_interaction(user_id, "denied_vote", case_id)
-            # В зависимости от правил, можно либо продолжить, либо отклонить.
-            # Здесь продолжаем по логике, что это просто для информации.
             bot.send_message(call.message.chat.id, "Понятно. Информация принята.")
 
         appealManager.set_user_state(user_id, AppealStates.WAITING_MAIN_ARGUMENT, data)

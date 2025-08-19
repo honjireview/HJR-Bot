@@ -25,11 +25,11 @@ app = Flask(__name__)
 # --- Импорт модулей ---
 import connectionChecker
 import appealManager
-from handlers import register_all_handlers # <-- ИЗМЕНЕНИЕ: Импортируем из нового пакета
-from handlers.council_flow import finalize_appeal # <-- ИЗМЕНЕНИЕ: Импортируем финальную функцию
+from handlers import register_all_handlers
+from handlers.council_flow import finalize_appeal
 
 # --- Регистрация обработчиков ---
-register_all_handlers(bot) # <-- ИЗМЕНЕНИЕ: Вызываем новую функцию регистрации
+register_all_handlers(bot)
 
 # --- Webhook route и Health Check ---
 @app.post(f"/webhook/{TELEGRAM_TOKEN}")
@@ -77,7 +77,7 @@ def startup_and_timer_tasks():
             for appeal in expired_appeals:
                 case_id = appeal['case_id']
                 log.info(f"Найден просроченный таймер для дела #{case_id}. Запускаю финальное рассмотрение.")
-                # ИЗМЕНЕНИЕ: Вызываем импортированную функцию
+                # Передаем bot в функцию, как и требуется
                 finalize_appeal(case_id, bot)
         except Exception as e:
             log.error(f"Ошибка в фоновой задаче проверки таймеров: {e}")
