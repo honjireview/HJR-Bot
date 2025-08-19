@@ -4,6 +4,7 @@ import os
 import google.generativeai as genai
 import appealManager
 from datetime import datetime
+from connectionChecker import GEMINI_MODEL_NAME # Импортируем имя модели
 
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 gemini_model = None
@@ -11,8 +12,7 @@ gemini_model = None
 if GEMINI_API_KEY:
     try:
         genai.configure(api_key=GEMINI_API_KEY)
-        # --- ИЗМЕНЕНИЕ: Указываем Pro-модель ---
-        gemini_model = genai.GenerativeModel('gemini-1.5-pro-latest')
+        gemini_model = genai.GenerativeModel(GEMINI_MODEL_NAME)
     except Exception as e:
         print(f"[КРИТИЧЕСКАЯ ОШИБКА] Не удалось настроить Gemini API: {e}")
 else:
@@ -93,7 +93,8 @@ def get_verdict_from_gemini(case_id):
     if not gemini_model:
         return "Ошибка: Модель Gemini не инициализирована."
     try:
-        print(f"--- Отправка запроса в Gemini API по делу #{case_id} (модель: Pro) ---")
+        # --- УЛУЧШЕННОЕ ЛОГИРОВАНИЕ ---
+        print(f"--- Отправка запроса в Gemini API по делу #{case_id} (модель: {GEMINI_MODEL_NAME}) ---")
         response = gemini_model.generate_content(prompt)
         print(f"--- Ответ от Gemini API по делу #{case_id} получен ---")
         return response.text

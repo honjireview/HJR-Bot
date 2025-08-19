@@ -6,6 +6,7 @@ import google.generativeai as genai
 from telebot import apihelper
 
 db_conn = None
+GEMINI_MODEL_NAME = 'gemini-1.5-pro-latest' # Выносим имя модели в константу
 
 def _normalize_dsn(dsn: str) -> str:
     if not dsn: return dsn
@@ -15,9 +16,10 @@ def _normalize_dsn(dsn: str) -> str:
 
 def _create_and_migrate_tables(conn: psycopg.Connection):
     """
-    Создаёт или обновляет все необходимые таблицы.
+    Создаёт таблицы и гарантированно добавляет недостающие колонки в таблицу appeals.
     """
     with conn.cursor() as cur:
+        # 1. Основная таблица для апелляций
         cur.execute("""
                     CREATE TABLE IF NOT EXISTS appeals (
                                                            case_id INTEGER PRIMARY KEY,
@@ -31,11 +33,15 @@ def _create_and_migrate_tables(conn: psycopg.Connection):
                                                            status TEXT,
                                                            expected_responses INTEGER,
                                                            timer_expires_at TIMESTAMPTZ,
-                                                           ai_verdict TEXT,
-                                                           created_at TIMESTAMPTZ,
-                                                           applicant_info JSONB
+                                                           ai_verdict TEXT
                     );
                     """)
+
+        # --- НАДЁЖНАЯ МИГРАЦИЯ: Добавляем колонки, если их нет ---
+        cur.execute("ALTER TABLE appeals ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ;")
+        cur.execute("ALTER TABLE appeals ADD COLUMN IF NOT EXISTS applicant_info JSONB;")
+
+        # 2. Таблица для хранения состояний FSM
         cur.execute("""
                     CREATE TABLE IF NOT EXISTS user_states (
                                                                user_id BIGINT PRIMARY KEY,
@@ -44,6 +50,8 @@ def _create_and_migrate_tables(conn: psycopg.Connection):
                         updated_at TIMESTAMPTZ DEFAULT NOW()
                         );
                     """)
+
+        # 3. Таблица для логирования взаимодействий
         cur.execute("""
                     CREATE TABLE IF NOT EXISTS interaction_logs (
                                                                     log_id SERIAL PRIMARY KEY,
@@ -54,12 +62,13 @@ def _create_and_migrate_tables(conn: psycopg.Connection):
                         created_at TIMESTAMPTZ DEFAULT NOW()
                         );
                     """)
+
     conn.commit()
     print("Проверка и миграция таблиц 'appeals', 'user_states', 'interaction_logs' завершена.")
 
 def check_db_connection() -> bool:
     """
-    Устанавливает соединение с PostgreSQL и проверяет структуру таблицы.
+    Устанавливает соединение с PostgreSQL и проверяет структуру таблиц.
     """
     global db_conn
     dsn = _normalize_dsn(os.getenv("DATABASE_URL"))
@@ -94,9 +103,9 @@ def check_all_apis(bot) -> bool:
         return False
     try:
         genai.configure(api_key=GEMINI_API_KEY)
-        # --- ИЗМЕНЕНИЕ: Проверяем доступность Pro-модели ---
-        genai.get_model("models/gemini-1.5-pro-latest")
-        print("[OK] Gemini API: Ключ успешно прошел аутентификацию для модели Pro.")
+        genai.get_model(f"models/{GEMINI_MODEL_NAME}")
+        # --- УЛУЧШЕННОЕ ЛОГИРОВАНИЕ ---
+        print(f"[OK] Gemini API: Ключ успешно прошел аутентификацию для модели '{GEMINI_MODEL_NAME}'.")
     except Exception as e:
         print(f"[ОШИБКА] Gemini API: {e}")
         return False
