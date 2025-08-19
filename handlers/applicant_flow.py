@@ -1,7 +1,4 @@
 # -*- coding: utf-8 -*-
-"""
-Обработчики подачи апелляции с финальными исправлениями и улучшениями.
-"""
 import logging
 import random
 from datetime import datetime
@@ -9,10 +6,12 @@ from telebot import types
 
 import appealManager
 from .telegram_helpers import validate_appeal_link
-from .council_helpers import request_counter_arguments
+from .council_helpers import request_counter_arguments, resolve_council_id
 
 log = logging.getLogger("hjr-bot.applicant_flow")
 CHARACTER_LIMIT = 4000
+
+# ... (класс AppealStates и _render_item_text без изменений) ...
 
 class AppealStates:
     WAITING_FOR_LINK = "waiting_for_link"
@@ -36,40 +35,50 @@ def _render_item_text(item: dict) -> str:
         return item.get("text", "")
     return "(Не удалось отобразить содержимое)"
 
+
 def register_applicant_handlers(bot):
     @bot.message_handler(commands=["start"], chat_types=['private'])
     def send_welcome(message):
         user_id = message.from_user.id
-        log.info(f"--- [START HANDLER] /start команда получена от user_id: {user_id} ---")
 
-        log.info(f"[START HANDLER] Шаг 1: Проверка авторизации редактора для user_id: {user_id}...")
-        is_editor = appealManager.is_user_an_editor(bot, user_id)
-        log.info(f"[START HANDLER] Шаг 2: Результат проверки авторизации для {user_id}: {is_editor}.")
+        # --- ИСПРАВЛЕНИЕ: Передаем ID чата в функцию авторизации ---
+        is_editor = appealManager.is_user_an_editor(bot, user_id, resolve_council_id())
 
         if not is_editor:
-            log.warning(f"[START HANDLER] ПРОВАЛ: Пользователь {user_id} не является редактором. Отправка сообщения об отказе.")
-            bot.send_message(message.chat.id, "Эта функция доступна только для авторизованных участников Совета Редакторов.")
-            log.info(f"--- [START HANDLER] /start обработка для {user_id} завершена (отказ). ---")
+            bot.send_message(message.chat.id, "Эта функция доступна только для участников Совета Редакторов.")
             return
 
-        log.info(f"[START HANDLER] Шаг 3: Проверка наличия активного диалога (состояния) для {user_id}...")
         if appealManager.get_user_state(user_id) is not None:
-            log.warning(f"[START HANDLER] ПРОВАЛ: У пользователя {user_id} уже есть активный диалог. Отправка сообщения об ошибке.")
             bot.send_message(message.chat.id, "Вы уже находитесь в процессе. Чтобы начать заново, отмените его: /cancel.")
-            log.info(f"--- [START HANDLER] /start обработка для {user_id} завершена (уже в диалоге). ---")
             return
 
-        log.info(f"[START HANDLER] Шаг 4: Активного диалога нет. Сброс состояния для {user_id}.")
         appealManager.delete_user_state(user_id)
-
         markup = types.InlineKeyboardMarkup()
         appeal_button = types.InlineKeyboardButton("Подать апелляцию", callback_data="start_appeal")
         markup.add(appeal_button)
-
-        log.info(f"[START HANDLER] Шаг 5: Отправка приветственного сообщения и кнопки пользователю {user_id}.")
         bot.send_message(message.chat.id, "Здравствуйте! Это бот для подачи апелляций...", reply_markup=markup)
-        log.info(f"--- [START HANDLER] /start обработка для {user_id} успешно завершена. ---")
 
+    @bot.callback_query_handler(func=lambda call: call.data == "start_appeal")
+    def handle_start_appeal_callback(call):
+        user_id = call.from_user.id
+
+        # --- ИСПРАВЛЕНИЕ: Передаем ID чата в функцию авторизации ---
+        is_editor = appealManager.is_user_an_editor(bot, user_id, resolve_council_id())
+
+        if not is_editor:
+            bot.answer_callback_query(call.id, "Эта функция доступна только для участников Совета Редакторов.", show_alert=True)
+            return
+
+        active_case = appealManager.get_active_appeal_by_user(user_id)
+        if active_case:
+            bot.answer_callback_query(call.id, f"Вы не можете подать новую апелляцию, пока активна ваша предыдущая (дело #{active_case}).", show_alert=True)
+            return
+
+        appealManager.set_user_state(user_id, AppealStates.WAITING_FOR_LINK)
+        bot.answer_callback_query(call.id)
+        bot.send_message(call.message.chat.id, "Пожалуйста, пришлите ссылку на сообщение или опрос...")
+
+    # ... (остальной код файла без изменений) ...
     @bot.message_handler(commands=["cancel"], chat_types=['private'])
     def cancel_process(message):
         user_id = message.from_user.id
@@ -79,37 +88,6 @@ def register_applicant_handlers(bot):
             appealManager.delete_appeal(case_id)
         appealManager.delete_user_state(user_id)
         bot.send_message(message.chat.id, "Процесс подачи апелляции отменен.")
-
-    @bot.callback_query_handler(func=lambda call: call.data == "start_appeal")
-    def handle_start_appeal_callback(call):
-        user_id = call.from_user.id
-        log.info(f"--- [BUTTON HANDLER] Нажата кнопка 'start_appeal' от user_id: {user_id} ---")
-
-        log.info(f"[BUTTON HANDLER] Шаг 1: Проверка авторизации редактора для {user_id}...")
-        is_editor = appealManager.is_user_an_editor(bot, user_id)
-        log.info(f"[BUTTON HANDLER] Шаг 2: Результат проверки авторизации для {user_id}: {is_editor}.")
-
-        if not is_editor:
-            log.warning(f"[BUTTON HANDLER] ПРОВАЛ: Пользователь {user_id} не является редактором. Отправка alert.")
-            bot.answer_callback_query(call.id, "Эта функция доступна только для авторизованных участников Совета Редакторов.", show_alert=True)
-            log.info(f"--- [BUTTON HANDLER] обработка для {user_id} завершена (отказ). ---")
-            return
-
-        log.info(f"[BUTTON HANDLER] Шаг 3: Проверка наличия активной апелляции для {user_id}...")
-        active_case = appealManager.get_active_appeal_by_user(user_id)
-        if active_case:
-            log.warning(f"[BUTTON HANDLER] ПРОВАЛ: У пользователя {user_id} уже есть активная апелляция #{active_case}. Отправка alert.")
-            bot.answer_callback_query(call.id, f"Вы не можете подать новую апелляцию, пока активна ваша предыдущая (дело #{active_case}).", show_alert=True)
-            log.info(f"--- [BUTTON HANDLER] обработка для {user_id} завершена (уже есть дело). ---")
-            return
-
-        log.info(f"[BUTTON HANDLER] Шаг 4: Авторизация пройдена, активных дел нет. Установка состояния WAITING_FOR_LINK для {user_id}.")
-        appealManager.set_user_state(user_id, AppealStates.WAITING_FOR_LINK)
-        bot.answer_callback_query(call.id)
-
-        log.info(f"[BUTTON HANDLER] Шаг 5: Отправка сообщения с просьбой прислать ссылку пользователю {user_id}.")
-        bot.send_message(call.message.chat.id, "Пожалуйста, пришлите ссылку на сообщение или опрос...")
-        log.info(f"--- [BUTTON HANDLER] обработка для {user_id} успешно завершена. ---")
 
     @bot.message_handler(
         func=lambda message: (
@@ -126,7 +104,7 @@ def register_applicant_handlers(bot):
         data = state_data.get("data", {})
 
         if len(message.text) > CHARACTER_LIMIT:
-            bot.reply_to(message, "Вы превысили лимит символов (4000). Это сделано для защиты от спама...")
+            bot.reply_to(message, "Вы превысили лимит символов (4000).")
             return
 
         if state == AppealStates.WAITING_FOR_LINK:

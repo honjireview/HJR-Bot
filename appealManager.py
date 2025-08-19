@@ -5,10 +5,8 @@ import json
 import psycopg
 import logging
 from datetime import datetime
-from telebot import types
 
 import connectionChecker
-from handlers.council_helpers import resolve_council_id
 
 log = logging.getLogger("hjr-bot.appeal_manager")
 
@@ -21,7 +19,7 @@ def _get_conn():
             raise RuntimeError("Не удалось восстановить соединение с БД.")
     return conn
 
-# ... (все функции до 'Управление Редакторами' остаются без изменений) ...
+# ... (все функции до is_user_an_editor остаются без изменений) ...
 def create_appeal(case_id, initial_data):
     try:
         conn = _get_conn()
@@ -32,10 +30,8 @@ def create_appeal(case_id, initial_data):
                 INSERT INTO appeals (case_id, applicant_chat_id, decision_text, status, created_at, applicant_info, total_voters)
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (case_id) DO UPDATE SET
-                    applicant_chat_id = EXCLUDED.applicant_chat_id,
-                                                 decision_text = EXCLUDED.decision_text,
-                                                 status = EXCLUDED.status,
-                                                 created_at = EXCLUDED.created_at,
+                    applicant_chat_id = EXCLUDED.applicant_chat_id, decision_text = EXCLUDED.decision_text,
+                                                 status = EXCLUDED.status, created_at = EXCLUDED.created_at,
                                                  applicant_info = EXCLUDED.applicant_info;
                 """,
                 (case_id, initial_data.get('applicant_chat_id'), initial_data.get('decision_text'),
@@ -158,7 +154,6 @@ def delete_user_state(user_id):
     except Exception as e:
         log.error(f"[ОШИБКА] Не удалось удалить состояние для user_id {user_id}: {e}")
 
-# --- Управление Редакторами (Авторизация) ---
 def update_editor_list(editors):
     """Полностью перезаписывает список редакторов в БД."""
     try:
@@ -181,17 +176,21 @@ def update_editor_list(editors):
     except Exception as e:
         log.error(f"[ОШИБКА] Не удалось обновить список редакторов: {e}")
 
-def is_user_an_editor(user_id):
-    """Проверяет, есть ли user_id в таблице редакторов."""
+def is_user_an_editor(bot, user_id, chat_id):
+    """Проверяет, является ли пользователь участником указанного чата."""
+    log.info(f"--- [AUTH_CHECK] Начало проверки для user_id: {user_id} в чате: {chat_id} ---")
+    if not chat_id:
+        log.error("[AUTH_CHECK] ПРОВАЛ: ID чата редакторов не определён.")
+        return False
     try:
-        conn = _get_conn()
-        with conn.cursor() as cur:
-            cur.execute("SELECT 1 FROM editors WHERE user_id = %s", (user_id,))
-            return cur.fetchone() is not None
+        member = bot.get_chat_member(chat_id, user_id)
+        status = member.status
+        is_member = status in ['creator', 'administrator', 'member']
+        log.info(f"[AUTH_CHECK] Результат: Пользователь {user_id} имеет статус '{status}'. Является участником: {is_member}.")
+        return is_member
     except Exception as e:
-        log.error(f"[ОШИБКА] Не удалось проверить права редактора для user_id {user_id}: {e}")
-    return False
-
+        log.error(f"[AUTH_CHECK] ПРОВАЛ: Ошибка при вызове get_chat_member для user_id {user_id}. Детали: {e}")
+        return False
 
 def log_interaction(user_id, action, case_id=None, details=""):
     """Записывает действие в лог и возвращает ID этой записи."""
@@ -199,12 +198,8 @@ def log_interaction(user_id, action, case_id=None, details=""):
         conn = _get_conn()
         with conn.cursor() as cur:
             db_user_id = user_id if user_id != "SYSTEM" else None
-
             cur.execute(
-                """
-                INSERT INTO interaction_logs (user_id, case_id, action, details)
-                VALUES (%s, %s, %s, %s) RETURNING log_id;
-                """,
+                "INSERT INTO interaction_logs (user_id, case_id, action, details) VALUES (%s, %s, %s, %s) RETURNING log_id;",
                 (db_user_id, case_id, action, details)
             )
             log_id = cur.fetchone()[0]
