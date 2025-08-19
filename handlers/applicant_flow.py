@@ -40,6 +40,8 @@ def register_applicant_handlers(bot):
     @bot.message_handler(commands=["start"], chat_types=['private'])
     def send_welcome(message):
         user_id = message.from_user.id
+
+        # --- ИСПРАВЛЕНИЕ: Передаем 'bot' в функцию авторизации ---
         is_editor = appealManager.is_user_an_editor(bot, user_id)
         log.info(f"[AUTH] User {user_id} initiated /start. Editor status: {is_editor}.")
 
@@ -70,6 +72,8 @@ def register_applicant_handlers(bot):
     @bot.callback_query_handler(func=lambda call: call.data == "start_appeal")
     def handle_start_appeal_callback(call):
         user_id = call.from_user.id
+
+        # --- ИСПРАВЛЕНИЕ: Передаем 'bot' в функцию авторизации ---
         is_editor = appealManager.is_user_an_editor(bot, user_id)
         log.info(f"[AUTH] User {user_id} pressed 'start_appeal' button. Editor status: {is_editor}.")
 

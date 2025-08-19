@@ -56,8 +56,11 @@ def register_council_handlers(bot):
     @bot.message_handler(commands=['reply'], chat_types=['private'])
     def handle_reply_command(message):
         user_id = message.from_user.id
+
+        # --- ИСПРАВЛЕНИЕ: Передаем 'bot' в функцию авторизации ---
         is_editor = appealManager.is_user_an_editor(bot, user_id)
         log.info(f"[AUTH] User {user_id} initiated /reply. Editor status: {is_editor}.")
+
         if not is_editor:
             return
 
