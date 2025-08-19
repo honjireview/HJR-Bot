@@ -22,7 +22,7 @@ def sync_editors_list(bot):
 
     target_chat = resolve_council_id()
     if not target_chat:
-        error_msg = "EDITORS_CHANNEL_ID не задан в переменных окружения."
+        error_msg = "EDITORS_GROUP_ID не задан в переменных окружения."
         log.error(f"[SYNC_EDITORS] ПРОВАЛ: {error_msg}")
         return 0, error_msg
 

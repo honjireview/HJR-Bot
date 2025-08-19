@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Вспомогательные функции, связанные с каналом/чатом Совета (EDITORS_CHANNEL_ID).
+Вспомогательные функции, связанные с каналом/чатом Совета (EDITORS_GROUP_ID).
 """
 import os
 import re
@@ -16,14 +16,14 @@ _RESOLVED = {"value": None}
 
 def resolve_council_id() -> Optional[Union[int, str]]:
     """
-    Резолвит EDITORS_CHANNEL_ID из окружения в int (например -100...) или в username '@...'.
+    Резолвит EDITORS_GROUP_ID из окружения в int (например -100...) или в username '@...'.
     Кеширует результат.
     """
     if _RESOLVED["value"] is not None:
         return _RESOLVED["value"]
-    raw = (os.getenv("EDITORS_CHANNEL_ID") or "").strip()
+    raw = (os.getenv("EDITORS_GROUP_ID") or "").strip()
     if not raw:
-        log.warning("[council_helpers] EDITORS_CHANNEL_ID not set")
+        log.warning("[council_helpers] EDITORS_GROUP_ID not set")
         return None
     raw = raw.strip("\"' ")
     if re.fullmatch(r'-?\d+', raw):
@@ -38,12 +38,12 @@ def resolve_council_id() -> Optional[Union[int, str]]:
         _RESOLVED["value"] = username
         log.info(f"[council_helpers] resolved to username {username}")
         return username
-    log.error(f"[council_helpers] cannot resolve EDITORS_CHANNEL_ID: '{raw}'")
+    log.error(f"[council_helpers] cannot resolve EDITORS_GROUP_ID: '{raw}'")
     return None
 
 def is_link_from_council(bot, parsed_from_chat_id: Union[int, str]) -> bool:
     """
-    Проверяет, что parsed_from_chat_id соответствует EDITORS_CHANNEL_ID.
+    Проверяет, что parsed_from_chat_id соответствует EDITORS_GROUP_ID.
     """
     resolved = resolve_council_id()
     if not resolved:
@@ -103,7 +103,7 @@ def request_counter_arguments(bot, case_id: int):
 
     target = resolve_council_id()
     if not target:
-        log.error(f"[council_helpers] EDITORS_CHANNEL_ID not set — cannot send request for case #{case_id}")
+        log.error(f"[council_helpers] EDITORS_GROUP_ID not set — cannot send request for case #{case_id}")
         return
 
     try:

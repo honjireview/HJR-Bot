@@ -1,4 +1,7 @@
 # -*- coding: utf-8 -*-
+"""
+Обработчики и логика для потока Совета Редакторов.
+"""
 import logging
 import re
 from telebot import types
@@ -17,7 +20,6 @@ class CouncilStates:
     AWAITING_Q2 = "council_awaiting_q2"
 
 def finalize_appeal(case_id, bot):
-    # ... (код без изменений)
     log.info(f"Начало финального рассмотрения дела #{case_id}")
     appeal = appealManager.get_appeal(case_id)
     if not appeal or appeal.get('status') != 'collecting':
@@ -48,8 +50,10 @@ def register_council_handlers(bot):
     def handle_reply_command(message):
         user_id = message.from_user.id
 
-        # --- ИЗМЕНЕНИЕ: Авторизация по базе данных ---
-        if not appealManager.is_user_an_editor(user_id):
+        is_editor = appealManager.is_user_an_editor(user_id)
+        log.info(f"[AUTH] User {user_id} initiated /reply. Editor status: {is_editor}.")
+
+        if not is_editor:
             return
 
         m = REPLY_CMD_RE.search(message.text)
@@ -58,7 +62,6 @@ def register_council_handlers(bot):
             return
 
         case_id = int(m.group(1))
-        # ... (остальной код в функции без изменений)
         appeal = appealManager.get_appeal(case_id)
         if not appeal:
             bot.reply_to(message, f"Дело с номером #{case_id} не найдено.")
@@ -66,6 +69,7 @@ def register_council_handlers(bot):
         if appeal.get('status') != 'collecting':
             bot.reply_to(message, f"Сбор контраргументов по делу #{case_id} уже завершен.")
             return
+
         appealManager.set_user_state(user_id, CouncilStates.AWAITING_MAIN_ARG, data={"case_id": case_id})
         bot.send_message(user_id, f"Вы отвечаете по делу #{case_id}. Пожалуйста, изложите ваши основные контраргументы.")
 
@@ -73,7 +77,6 @@ def register_council_handlers(bot):
         func=lambda message: appealManager.get_user_state(message.from_user.id) is not None and str(appealManager.get_user_state(message.from_user.id).get('state', '')).startswith("council_") and message.chat.type == 'private'
     )
     def handle_council_dialogue(message):
-        # ... (код в этой функции без изменений)
         user_id = message.from_user.id
         state_data = appealManager.get_user_state(user_id)
         state = state_data.get("state")
