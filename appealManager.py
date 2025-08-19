@@ -18,38 +18,33 @@ def _get_conn():
             raise RuntimeError("Не удалось восстановить соединение с БД.")
     return conn
 
-# --- Управление Апелляциями ---
-
 def create_appeal(case_id, initial_data):
-    """Создаёт новую запись об апелляции в БД."""
+    """Создаёт новую запись об апелляции в БД, включая новые поля."""
     try:
         conn = _get_conn()
         with conn.cursor() as cur:
             applicant_answers_json = json.dumps(initial_data.get('applicant_answers', {}))
             council_answers_json = json.dumps(initial_data.get('council_answers', []))
+            applicant_info_json = json.dumps(initial_data.get('applicant_info', {}))
 
             cur.execute(
                 """
                 INSERT INTO appeals (case_id, applicant_chat_id, decision_text, applicant_arguments,
                                      applicant_answers, council_answers, voters_to_mention, total_voters, status,
-                                     expected_responses, timer_expires_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                     expected_responses, timer_expires_at, created_at, applicant_info)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (case_id) DO UPDATE SET
                     applicant_chat_id = EXCLUDED.applicant_chat_id,
                                                  decision_text = EXCLUDED.decision_text,
-                                                 applicant_answers = EXCLUDED.applicant_answers,
-                                                 council_answers = EXCLUDED.council_answers,
-                                                 voters_to_mention = EXCLUDED.voters_to_mention,
-                                                 total_voters = EXCLUDED.total_voters,
                                                  status = EXCLUDED.status,
-                                                 expected_responses = EXCLUDED.expected_responses,
-                                                 timer_expires_at = EXCLUDED.timer_expires_at;
+                                                 created_at = EXCLUDED.created_at,
+                                                 applicant_info = EXCLUDED.applicant_info;
                 """,
-                (case_id, initial_data['applicant_chat_id'], initial_data['decision_text'],
+                (case_id, initial_data.get('applicant_chat_id'), initial_data.get('decision_text'),
                  initial_data.get('applicant_arguments'), applicant_answers_json, council_answers_json,
                  initial_data.get('voters_to_mention', []), initial_data.get('total_voters'),
-                 initial_data['status'], initial_data.get('expected_responses'),
-                 initial_data.get('timer_expires_at'))
+                 initial_data.get('status'), initial_data.get('expected_responses'),
+                 initial_data.get('timer_expires_at'), initial_data.get('created_at'), applicant_info_json)
             )
         conn.commit()
         print(f"Дело #{case_id} успешно создано/обновлено.")
@@ -65,8 +60,7 @@ def get_appeal(case_id):
             record = cur.fetchone()
             if record:
                 columns = [desc[0] for desc in cur.description]
-                appeal_data = dict(zip(columns, record))
-                return appeal_data
+                return dict(zip(columns, record))
     except Exception as e:
         print(f"[ОШИБКА] Не удалось получить дело #{case_id}: {e}")
     return None
@@ -78,7 +72,6 @@ def update_appeal(case_id, key, value):
         with conn.cursor() as cur:
             if isinstance(value, (dict, list)):
                 value = json.dumps(value)
-
             query = psycopg.sql.SQL("UPDATE appeals SET {key} = %s WHERE case_id = %s").format(
                 key=psycopg.sql.Identifier(key)
             )
@@ -117,8 +110,7 @@ def get_expired_appeals():
         with conn.cursor() as cur:
             cur.execute("SELECT * FROM appeals WHERE status = 'collecting' AND timer_expires_at IS NOT NULL AND timer_expires_at < NOW() AT TIME ZONE 'utc'")
             records = cur.fetchall()
-            if not records:
-                return []
+            if not records: return []
             columns = [desc[0] for desc in cur.description]
             return [dict(zip(columns, record)) for record in records]
     except Exception as e:

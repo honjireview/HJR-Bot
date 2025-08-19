@@ -15,13 +15,9 @@ def _normalize_dsn(dsn: str) -> str:
 
 def _create_and_migrate_tables(conn: psycopg.Connection):
     """
-    Создаёт или обновляет все необходимые таблицы:
-    - appeals: для хранения дел.
-    - user_states: для отказоустойчивого хранения состояний диалога (FSM).
-    - interaction_logs: для логирования всех действий.
+    Создаёт или обновляет все необходимые таблицы.
     """
     with conn.cursor() as cur:
-        # 1. Таблица для апелляций
         cur.execute("""
                     CREATE TABLE IF NOT EXISTS appeals (
                                                            case_id INTEGER PRIMARY KEY,
@@ -35,11 +31,11 @@ def _create_and_migrate_tables(conn: psycopg.Connection):
                                                            status TEXT,
                                                            expected_responses INTEGER,
                                                            timer_expires_at TIMESTAMPTZ,
-                                                           ai_verdict TEXT
+                                                           ai_verdict TEXT,
+                                                           created_at TIMESTAMPTZ,
+                                                           applicant_info JSONB
                     );
                     """)
-
-        # 2. Таблица для хранения состояний FSM
         cur.execute("""
                     CREATE TABLE IF NOT EXISTS user_states (
                                                                user_id BIGINT PRIMARY KEY,
@@ -48,8 +44,6 @@ def _create_and_migrate_tables(conn: psycopg.Connection):
                         updated_at TIMESTAMPTZ DEFAULT NOW()
                         );
                     """)
-
-        # 3. Таблица для логирования взаимодействий
         cur.execute("""
                     CREATE TABLE IF NOT EXISTS interaction_logs (
                                                                     log_id SERIAL PRIMARY KEY,
@@ -60,13 +54,12 @@ def _create_and_migrate_tables(conn: psycopg.Connection):
                         created_at TIMESTAMPTZ DEFAULT NOW()
                         );
                     """)
-
     conn.commit()
     print("Проверка и миграция таблиц 'appeals', 'user_states', 'interaction_logs' завершена.")
 
 def check_db_connection() -> bool:
     """
-    Устанавливает соединение с PostgreSQL и проверяет структуру таблиц.
+    Устанавливает соединение с PostgreSQL и проверяет структуру таблицы.
     """
     global db_conn
     dsn = _normalize_dsn(os.getenv("DATABASE_URL"))
@@ -74,7 +67,6 @@ def check_db_connection() -> bool:
         print("[ОШИБКА] PostgreSQL: Не найдена переменная окружения DATABASE_URL.")
         return False
     try:
-        # Используем autocommit=True для простоты в рамках этого модуля
         db_conn = psycopg.connect(dsn, autocommit=True)
         _create_and_migrate_tables(db_conn)
         print("[OK] PostgreSQL: Соединение установлено и таблицы проверены.")
@@ -102,8 +94,9 @@ def check_all_apis(bot) -> bool:
         return False
     try:
         genai.configure(api_key=GEMINI_API_KEY)
-        genai.get_model("models/gemini-1.5-flash-latest")
-        print("[OK] Gemini API: Ключ успешно прошел аутентификацию.")
+        # --- ИЗМЕНЕНИЕ: Проверяем доступность Pro-модели ---
+        genai.get_model("models/gemini-1.5-pro-latest")
+        print("[OK] Gemini API: Ключ успешно прошел аутентификацию для модели Pro.")
     except Exception as e:
         print(f"[ОШИБКА] Gemini API: {e}")
         return False
