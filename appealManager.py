@@ -3,6 +3,7 @@
 import os
 import json
 import psycopg
+import logging # <-- ИСПРАВЛЕНИЕ: Добавлен недостающий импорт
 from datetime import datetime
 from telebot import types
 
@@ -12,6 +13,7 @@ from handlers.council_helpers import resolve_council_id
 log = logging.getLogger("hjr-bot.appeal_manager")
 
 def _get_conn():
+    """Возвращает текущее соединение из connectionChecker."""
     conn = connectionChecker.db_conn
     if conn is None or conn.closed:
         if connectionChecker.check_db_connection():
@@ -20,8 +22,8 @@ def _get_conn():
             raise RuntimeError("Не удалось восстановить соединение с БД.")
     return conn
 
-# ... (все функции до is_user_an_editor остаются без изменений) ...
 def create_appeal(case_id, initial_data):
+    """Создаёт новую запись об апелляции в БД."""
     try:
         conn = _get_conn()
         with conn.cursor() as cur:
@@ -31,8 +33,10 @@ def create_appeal(case_id, initial_data):
                 INSERT INTO appeals (case_id, applicant_chat_id, decision_text, status, created_at, applicant_info, total_voters)
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (case_id) DO UPDATE SET
-                    applicant_chat_id = EXCLUDED.applicant_chat_id, decision_text = EXCLUDED.decision_text,
-                                                 status = EXCLUDED.status, created_at = EXCLUDED.created_at,
+                    applicant_chat_id = EXCLUDED.applicant_chat_id,
+                                                 decision_text = EXCLUDED.decision_text,
+                                                 status = EXCLUDED.status,
+                                                 created_at = EXCLUDED.created_at,
                                                  applicant_info = EXCLUDED.applicant_info;
                 """,
                 (case_id, initial_data.get('applicant_chat_id'), initial_data.get('decision_text'),
@@ -41,9 +45,10 @@ def create_appeal(case_id, initial_data):
             )
         conn.commit()
     except Exception as e:
-        print(f"[ОШИБКА] Не удалось создать апелляцию #{case_id}: {e}")
+        log.error(f"[ОШИБКА] Не удалось создать апелляцию #{case_id}: {e}")
 
 def get_appeal(case_id):
+    """Возвращает данные по конкретному делу из БД."""
     try:
         conn = _get_conn()
         with conn.cursor() as cur:
@@ -53,10 +58,11 @@ def get_appeal(case_id):
                 columns = [desc[0] for desc in cur.description]
                 return dict(zip(columns, record))
     except Exception as e:
-        print(f"[ОШИБКА] Не удалось получить дело #{case_id}: {e}")
+        log.error(f"[ОШИБКА] Не удалось получить дело #{case_id}: {e}")
     return None
 
 def update_appeal(case_id, key, value):
+    """Обновляет одно поле в существующей апелляции в БД."""
     try:
         conn = _get_conn()
         with conn.cursor() as cur:
@@ -68,9 +74,10 @@ def update_appeal(case_id, key, value):
             cur.execute(query, (value, case_id))
         conn.commit()
     except Exception as e:
-        print(f"[ОШИБКА] Не удалось обновить дело #{case_id} (поле {key}): {e}")
+        log.error(f"[ОШИБКА] Не удалось обновить дело #{case_id} (поле {key}): {e}")
 
 def add_council_answer(case_id, answer_data):
+    """Добавляет ответ от редактора в список ответов."""
     try:
         appeal = get_appeal(case_id)
         if appeal:
@@ -78,18 +85,20 @@ def add_council_answer(case_id, answer_data):
             current_answers.append(answer_data)
             update_appeal(case_id, 'council_answers', current_answers)
     except Exception as e:
-        print(f"[ОШИБКА] Не удалось добавить ответ в дело #{case_id}: {e}")
+        log.error(f"[ОШИБКА] Не удалось добавить ответ в дело #{case_id}: {e}")
 
 def delete_appeal(case_id):
+    """Удаляет дело из БД."""
     try:
         conn = _get_conn()
         with conn.cursor() as cur:
             cur.execute("DELETE FROM appeals WHERE case_id = %s", (case_id,))
         conn.commit()
     except Exception as e:
-        print(f"[ОШИБКА] Не удалось удалить дело #{case_id}: {e}")
+        log.error(f"[ОШИБКА] Не удалось удалить дело #{case_id}: {e}")
 
 def get_expired_appeals():
+    """Возвращает все дела, у которых истек таймер."""
     try:
         conn = _get_conn()
         with conn.cursor() as cur:
@@ -99,10 +108,11 @@ def get_expired_appeals():
             columns = [desc[0] for desc in cur.description]
             return [dict(zip(columns, record)) for record in records]
     except Exception as e:
-        print(f"[ОШИБКА] Не удалось получить просроченные апелляции: {e}")
+        log.error(f"[ОШИБКА] Не удалось получить просроченные апелляции: {e}")
     return []
 
 def get_active_appeal_by_user(user_id):
+    """Ищет активную (не 'closed') апелляцию от пользователя."""
     try:
         conn = _get_conn()
         with conn.cursor() as cur:
@@ -113,10 +123,11 @@ def get_active_appeal_by_user(user_id):
             record = cur.fetchone()
             return record[0] if record else None
     except Exception as e:
-        print(f"[ОШИБКА] Не удалось проверить активные апелляции для user_id {user_id}: {e}")
+        log.error(f"[ОШИБКА] Не удалось проверить активные апелляции для user_id {user_id}: {e}")
     return None
 
 def get_user_state(user_id):
+    """Получает состояние пользователя из БД."""
     try:
         conn = _get_conn()
         with conn.cursor() as cur:
@@ -125,10 +136,11 @@ def get_user_state(user_id):
             if record:
                 return {"state": record[0], "data": record[1] or {}}
     except Exception as e:
-        print(f"[ОШИБКА] Не удалось получить состояние для user_id {user_id}: {e}")
+        log.error(f"[ОШИБКА] Не удалось получить состояние для user_id {user_id}: {e}")
     return None
 
 def set_user_state(user_id, state, data=None):
+    """Сохраняет состояние пользователя в БД."""
     try:
         conn = _get_conn()
         with conn.cursor() as cur:
@@ -144,16 +156,17 @@ def set_user_state(user_id, state, data=None):
             )
         conn.commit()
     except Exception as e:
-        print(f"[ОШИБКА] Не удалось установить состояние для user_id {user_id}: {e}")
+        log.error(f"[ОШИБКА] Не удалось установить состояние для user_id {user_id}: {e}")
 
 def delete_user_state(user_id):
+    """Удаляет состояние пользователя из БД."""
     try:
         conn = _get_conn()
         with conn.cursor() as cur:
             cur.execute("DELETE FROM user_states WHERE user_id = %s", (user_id,))
         conn.commit()
     except Exception as e:
-        print(f"[ОШИБКА] Не удалось удалить состояние для user_id {user_id}: {e}")
+        log.error(f"[ОШИБКА] Не удалось удалить состояние для user_id {user_id}: {e}")
 
 
 def is_user_an_editor(bot, user_id):
@@ -173,13 +186,11 @@ def is_user_an_editor(bot, user_id):
         status = member.status
         log.info(f"[AUTH_CHECK] Шаг 3: Ответ от API получен. Статус пользователя: '{status}'.")
 
-        # Участником считается любой, кроме тех, кто вышел или был забанен
         is_member = status in ['creator', 'administrator', 'member']
         log.info(f"[AUTH_CHECK] Шаг 4: Результат проверки: {is_member}.")
         log.info(f"--- [AUTH_CHECK] Проверка для {user_id} успешно завершена. ---")
         return is_member
     except Exception as e:
-        # Если API возвращает ошибку (например, "user not found"), значит, он не участник
         log.error(f"[AUTH_CHECK] ПРОВАЛ: Ошибка при вызове get_chat_member для user_id {user_id}. Детали: {e}")
         log.info(f"--- [AUTH_CHECK] Проверка для {user_id} завершена (с ошибкой). ---")
         return False
@@ -203,5 +214,5 @@ def log_interaction(user_id, action, case_id=None, details=""):
             conn.commit()
             return log_id
     except Exception as e:
-        print(f"[ОШИБКА] Не удалось записать лог для user_id {user_id}: {e}")
+        log.error(f"[ОШИБКА] Не удалось записать лог для user_id {user_id}: {e}")
     return None
