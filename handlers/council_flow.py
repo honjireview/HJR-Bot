@@ -13,6 +13,7 @@ from main import COMMIT_HASH
 log = logging.getLogger("hjr-bot.council_flow")
 
 REPLY_CMD_RE = re.compile(r'/reply\s*#?(\d{4,7})', re.IGNORECASE)
+APPEALS_CHANNEL_ID = os.getenv("APPEALS_CHANNEL_ID")
 
 class CouncilStates:
     AWAITING_MAIN_ARG = "council_awaiting_main_arg"
@@ -42,6 +43,11 @@ def finalize_appeal(case_id, bot):
         editors_chat_id = resolve_council_id()
         if editors_chat_id:
             bot.send_message(editors_chat_id, f"Дело #{case_id} закрыто.\n\n{verdict}")
+        if APPEALS_CHANNEL_ID:
+            bot.send_message(APPEALS_CHANNEL_ID, verdict)
+        else:
+            log.warning(f"APPEALS_CHANNEL_ID не задан. Вердикт по делу #{case_id} не будет опубликован.")
+        log.info(f"Вердикт по делу #{case_id} успешно отправлен во все каналы.")
     except Exception as e:
         log.error(f"Ошибка при отправке вердикта по делу #{case_id}: {e}")
 
@@ -49,10 +55,8 @@ def register_council_handlers(bot):
     @bot.message_handler(commands=['reply'], chat_types=['private'])
     def handle_reply_command(message):
         user_id = message.from_user.id
-
-        is_editor = appealManager.is_user_an_editor(user_id)
+        is_editor = appealManager.is_user_an_editor(bot, user_id)
         log.info(f"[AUTH] User {user_id} initiated /reply. Editor status: {is_editor}.")
-
         if not is_editor:
             return
 
