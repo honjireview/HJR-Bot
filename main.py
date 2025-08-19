@@ -25,8 +25,7 @@ app = Flask(__name__)
 # --- Импорт модулей ---
 import connectionChecker
 import appealManager
-from handlers import register_all_handlers
-from handlers.council_flow import finalize_appeal
+from handlers import register_all_handlers # Этот импорт теперь будет работать
 
 # --- Регистрация обработчиков ---
 register_all_handlers(bot)
@@ -46,6 +45,9 @@ def health_check():
 
 # --- Фоновые задачи ---
 def startup_and_timer_tasks():
+    # ВАЖНО: Импортируем finalize_appeal здесь, а не в начале файла
+    from handlers.council_flow import finalize_appeal
+
     log.info("Запуск фоновых задач...")
     time.sleep(3) # Даем gunicorn запуститься
 
@@ -77,7 +79,6 @@ def startup_and_timer_tasks():
             for appeal in expired_appeals:
                 case_id = appeal['case_id']
                 log.info(f"Найден просроченный таймер для дела #{case_id}. Запускаю финальное рассмотрение.")
-                # Передаем bot в функцию, как и требуется
                 finalize_appeal(case_id, bot)
         except Exception as e:
             log.error(f"Ошибка в фоновой задаче проверки таймеров: {e}")
