@@ -13,7 +13,6 @@ from .council_helpers import request_counter_arguments
 
 log = logging.getLogger("hjr-bot.applicant_flow")
 
-# --- Машина состояний (FSM) ---
 class AppealStates:
     WAITING_FOR_LINK = "waiting_for_link"
     WAITING_VOTE_CONFIRM = "waiting_vote_confirm"
@@ -22,8 +21,22 @@ class AppealStates:
     WAITING_Q2 = "waiting_q2"
     WAITING_Q3 = "waiting_q3"
 
-def register_applicant_handlers(bot):
+def _render_item_text(item: dict) -> str:
+    """Собирает человекочитаемый текст из словаря с содержимым поста."""
+    if not item: return ""
+    if item.get("type") == "poll":
+        p = item.get("poll", {})
+        q = p.get("question", "")
+        opts = p.get("options", [])
+        opts_text = "\n".join([f"- {o.get('text', '')}: {o.get('voter_count', 0)} голосов" for o in opts])
+        total = p.get('total_voter_count')
+        total_text = f"\nВсего проголосовало: {total}" if total is not None else ""
+        return f"Опрос: {q}\n{opts_text}{total_text}"
+    if item.get("type") == "text":
+        return item.get("text", "")
+    return "(Не удалось отобразить содержимое)"
 
+def register_applicant_handlers(bot):
     @bot.message_handler(commands=["start"], chat_types=['private'])
     def send_welcome(message):
         user_id = message.from_user.id
@@ -33,11 +46,7 @@ def register_applicant_handlers(bot):
         markup = types.InlineKeyboardMarkup()
         appeal_button = types.InlineKeyboardButton("Подать апелляцию", callback_data="start_appeal")
         markup.add(appeal_button)
-        bot.send_message(
-            message.chat.id,
-            "Здравствуйте! Это бот для подачи апелляций проекта Honji Review. Нажмите кнопку ниже, чтобы начать процесс.",
-            reply_markup=markup
-        )
+        bot.send_message(message.chat.id, "Здравствуйте! Это бот для подачи апелляций...", reply_markup=markup)
 
     @bot.message_handler(commands=["cancel"], chat_types=['private'])
     def cancel_process(message):
@@ -47,7 +56,7 @@ def register_applicant_handlers(bot):
         if state and state.get("data", {}).get("case_id"):
             case_id = state["data"]["case_id"]
             appealManager.delete_appeal(case_id)
-            appealManager.log_interaction(user_id, "command_cancel", case_id, "Appeal deleted from DB")
+            appealManager.log_interaction(user_id, "command_cancel", case_id, "Appeal deleted")
         appealManager.delete_user_state(user_id)
         bot.send_message(message.chat.id, "Процесс подачи апелляции отменен.", reply_markup=types.ReplyKeyboardRemove())
 
@@ -56,14 +65,10 @@ def register_applicant_handlers(bot):
         user_id = call.from_user.id
         appealManager.log_interaction(user_id, "callback_start_appeal")
         appealManager.set_user_state(user_id, AppealStates.WAITING_FOR_LINK)
-        log.info(f"[FSM] User {user_id} pressed 'start_appeal'. Set state to WAITING_FOR_LINK.")
-        try:
-            bot.answer_callback_query(call.id)
+        log.info(f"[FSM] User {user_id} set state to WAITING_FOR_LINK.")
+        try: bot.answer_callback_query(call.id)
         except Exception: pass
-        bot.send_message(
-            call.message.chat.id,
-            "Пожалуйста, пришлите ссылку на сообщение или опрос из канала/группы Совета Редакторов, который вы хотите оспорить."
-        )
+        bot.send_message(call.message.chat.id, "Пожалуйста, пришлите ссылку на сообщение или опрос...")
 
     @bot.message_handler(
         func=lambda message: appealManager.get_user_state(message.from_user.id) is not None and message.chat.type == 'private',
@@ -78,22 +83,19 @@ def register_applicant_handlers(bot):
         log.info(f"[FSM] Handling message from user {user_id} in state '{state}'.")
 
         if state == AppealStates.WAITING_FOR_LINK:
-            link = message.text
-            is_valid, result = validate_appeal_link(bot, link, user_chat_id=message.chat.id)
+            is_valid, result = validate_appeal_link(bot, message.text, user_chat_id=message.chat.id)
             if not is_valid:
                 bot.reply_to(message, f"Ошибка: {result}")
-                appealManager.log_interaction(user_id, "link_validation_failed", details=f"Link: {link}, Error: {result}")
+                appealManager.log_interaction(user_id, "link_validation_failed", details=f"Link: {message.text}, Error: {result}")
                 return
 
-            appealManager.log_interaction(user_id, "link_validation_success", details=f"Link: {link}")
             content_data = result
-            is_poll = content_data.get("type") == "poll"
             new_case_id = random.randint(10000, 99999)
             data["case_id"] = new_case_id
-            data["content_data"] = content_data
+
             initial_appeal_data = {
                 "applicant_chat_id": message.chat.id,
-                "decision_text": content_data.get("text") or content_data.get("poll", {}).get("question", ""),
+                "decision_text": _render_item_text(content_data), # <-- ВАЖНОЕ ИЗМЕНЕНИЕ
                 "total_voters": content_data.get("poll", {}).get("total_voter_count"),
                 "status": "collecting",
             }
@@ -101,9 +103,9 @@ def register_applicant_handlers(bot):
             appealManager.log_interaction(user_id, "appeal_created", new_case_id)
             bot.send_message(message.chat.id, f"Ссылка принята. Вашему делу присвоен номер #{new_case_id}.")
 
-            if is_poll:
+            if content_data.get("type") == "poll":
                 appealManager.set_user_state(user_id, AppealStates.WAITING_VOTE_CONFIRM, data)
-                log.info(f"[FSM] User {user_id}, case #{new_case_id}: Link was a poll. Moving to WAITING_VOTE_CONFIRM.")
+                log.info(f"[FSM] User {user_id}, case #{new_case_id}: Moving to WAITING_VOTE_CONFIRM.")
                 markup = types.InlineKeyboardMarkup()
                 markup.add(
                     types.InlineKeyboardButton("Да, я голосовал(а)", callback_data=f"vote_yes_{new_case_id}"),
@@ -112,37 +114,33 @@ def register_applicant_handlers(bot):
                 bot.send_message(message.chat.id, "Уточняющий вопрос: вы принимали участие в этом голосовании?", reply_markup=markup)
             else:
                 appealManager.set_user_state(user_id, AppealStates.WAITING_MAIN_ARGUMENT, data)
-                log.info(f"[FSM] User {user_id}, case #{new_case_id}: Link was text. Moving to WAITING_MAIN_ARGUMENT.")
+                log.info(f"[FSM] User {user_id}, case #{new_case_id}: Moving to WAITING_MAIN_ARGUMENT.")
                 bot.send_message(message.chat.id, "Теперь, пожалуйста, изложите ваши основные аргументы.")
 
         elif state == AppealStates.WAITING_MAIN_ARGUMENT:
             appealManager.update_appeal(case_id, "applicant_arguments", message.text)
             appealManager.set_user_state(user_id, AppealStates.WAITING_Q1, data)
-            appealManager.log_interaction(user_id, "submitted_main_argument", case_id)
-            log.info(f"[FSM] User {user_id}, case #{case_id}: Got main argument. Moving to WAITING_Q1.")
+            log.info(f"[FSM] User {user_id}, case #{case_id}: Moving to WAITING_Q1.")
             bot.send_message(message.chat.id, "Спасибо. Теперь ответьте на уточняющие вопросы.")
             bot.send_message(message.chat.id, "Вопрос 1/3: Какой пункт устава, по вашему мнению, был нарушен?")
 
         elif state == AppealStates.WAITING_Q1:
             _update_appeal_answer(case_id, "q1", message.text)
             appealManager.set_user_state(user_id, AppealStates.WAITING_Q2, data)
-            appealManager.log_interaction(user_id, "submitted_q1", case_id)
-            log.info(f"[FSM] User {user_id}, case #{case_id}: Got Q1. Moving to WAITING_Q2.")
+            log.info(f"[FSM] User {user_id}, case #{case_id}: Moving to WAITING_Q2.")
             bot.send_message(message.chat.id, "Вопрос 2/3: Какой результат вы считаете справедливым?")
 
         elif state == AppealStates.WAITING_Q2:
             _update_appeal_answer(case_id, "q2", message.text)
             appealManager.set_user_state(user_id, AppealStates.WAITING_Q3, data)
-            appealManager.log_interaction(user_id, "submitted_q2", case_id)
-            log.info(f"[FSM] User {user_id}, case #{case_id}: Got Q2. Moving to WAITING_Q3.")
+            log.info(f"[FSM] User {user_id}, case #{case_id}: Moving to WAITING_Q3.")
             bot.send_message(message.chat.id, "Вопрос 3/3: Есть ли дополнительный контекст, важный для дела?")
 
         elif state == AppealStates.WAITING_Q3:
             _update_appeal_answer(case_id, "q3", message.text)
             appealManager.delete_user_state(user_id)
-            appealManager.log_interaction(user_id, "submitted_q3_and_finished", case_id)
-            log.info(f"[FSM] User {user_id}, case #{case_id}: Got Q3. Dialog finished. Requesting counter-arguments.")
-            bot.send_message(message.chat.id, "Спасибо, ваша апелляция полностью оформлена и отправлена на рассмотрение. Вы получите уведомление о вердикте.")
+            log.info(f"[FSM] User {user_id}, case #{case_id}: Dialog finished.")
+            bot.send_message(message.chat.id, "Спасибо, ваша апелляция полностью оформлена и отправлена на рассмотрение.")
             request_counter_arguments(bot, case_id)
 
     @bot.callback_query_handler(func=lambda call: call.data.startswith("vote_"))
@@ -176,7 +174,7 @@ def register_applicant_handlers(bot):
             bot.send_message(call.message.chat.id, "Понятно. Информация принята.")
 
         appealManager.set_user_state(user_id, AppealStates.WAITING_MAIN_ARGUMENT, data)
-        log.info(f"[FSM] User {user_id}, case #{case_id}: Moving to WAITING_MAIN_ARGUMENT after vote confirm.")
+        log.info(f"[FSM] User {user_id}, case #{case_id}: Moving to WAITING_MAIN_ARGUMENT.")
         bot.send_message(call.message.chat.id, "Теперь, пожалуйста, изложите ваши основные аргументы.")
         bot.answer_callback_query(call.id)
 
