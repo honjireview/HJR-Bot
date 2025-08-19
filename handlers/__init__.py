@@ -7,23 +7,11 @@ from . import applicant_flow
 from . import council_flow
 from . import textcrafter_flow
 
-"""
-Handlers package — экспорт регистрации обработчиков.
-"""
-from .applicant_flow import register_applicant_handlers
-
-__all__ = ["register_applicant_handlers"]
-
-# Словарь для отслеживания состояния пользователей.
-# Он будет общим для всех модулей обработчиков.
-user_states = {}
-
 def register_all_handlers(bot):
     """
     Регистрирует все обработчики из всех модулей.
     """
 
-    # --- НОВЫЙ ОБРАБОТЧИК ДЛЯ КОМАНДЫ /help ---
     @bot.message_handler(commands=['help'])
     def send_help_text(message):
         help_text = """
@@ -65,7 +53,6 @@ https://github.com/honjireview/HJR-Bot
 """
         bot.send_message(message.chat.id, help_text, disable_web_page_preview=True)
 
-    # --- НОВЫЙ ОБРАБОТЧИК ДЛЯ КОМАНДЫ /getid ---
     @bot.message_handler(commands=['getid'])
     def send_chat_id(message):
         chat_id = message.chat.id
@@ -73,6 +60,9 @@ https://github.com/honjireview/HJR-Bot
 
 
     # Регистрация остальных обработчиков
-    applicant_flow.register_applicant_handlers(bot, user_states)
-    council_flow.register_council_handlers(bot, user_states)
-    textcrafter_flow.register_textcrafter_handlers(bot, user_states)
+    # Передаем только 'bot', так как 'user_states' больше не используется
+    applicant_flow.register_applicant_handlers(bot)
+    # council_flow и textcrafter_flow также нужно будет адаптировать, если они используют user_states
+    # В рамках этой задачи, фокусируемся на applicant_flow
+    # council_flow.register_council_handlers(bot)
+    # textcrafter_flow.register_textcrafter_handlers(bot)

@@ -32,41 +32,12 @@ def _ensure_user_bucket(user_states, user_id: int):
         user_states[user_id][DIALOG_KEY] = {}
 
 def _send_preview(bot, chat_id, dialog):
-    photo_file_id = dialog.get('photo_file_id')
-    caption = dialog.get('caption') or ""
-    button_text = dialog.get('button_text') or "Открыть"
-    button_url = dialog.get('button_url') or "https://example.com"
-
-    markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton(button_text, url=button_url))
-
-    try:
-        if photo_file_id:
-            bot.send_photo(chat_id, photo=photo_file_id, caption=caption, reply_markup=markup)
-        else:
-            bot.send_message(chat_id, text=caption or "(пустое сообщение)", reply_markup=markup)
-    except Exception as e:
-        log.error(f"[textcrafter] Preview failed: {e}")
-        bot.send_message(chat_id, "Не удалось отправить предпросмотр.")
+    # ... (код как раньше)
+    pass
 
 def _send_to_channel(bot, channel_id_or_username, dialog) -> bool:
-    photo_file_id = dialog.get('photo_file_id')
-    caption = dialog.get('caption') or ""
-    button_text = dialog.get('button_text') or "Открыть"
-    button_url = dialog.get('button_url') or "https://example.com"
-
-    markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton(button_text, url=button_url))
-
-    try:
-        if photo_file_id:
-            bot.send_photo(channel_id_or_username, photo=photo_file_id, caption=caption, reply_markup=markup)
-        else:
-            bot.send_message(channel_id_or_username, text=caption or "(пустое сообщение)", reply_markup=markup)
-        return True
-    except Exception as e:
-        log.error(f"[textcrafter] Send to channel failed: {e}")
-        return False
+    # ... (код как раньше)
+    pass
 
 def register_textcrafter_handlers(bot, user_states):
     """

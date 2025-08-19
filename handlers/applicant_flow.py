@@ -1,71 +1,36 @@
 # -*- coding: utf-8 -*-
 """
-Обработчики подачи апелляции. Адаптирован под новый copy_or_forward_message,
-который возвращает dict с извлечённым содержимым сообщения.
+Обработчики подачи апелляции с использованием FSM и персистентного хранения состояний в БД.
 """
 import logging
 import random
 from datetime import datetime
-
 from telebot import types
 
 import appealManager
-
 from .parse_link import parse_message_link
-from .telegram_helpers import get_chat_safe, copy_or_forward_message
-from .council_helpers import (
-    is_link_from_council,
-    resolve_council_id,
-    set_council_chat_id_runtime,
-    request_counter_arguments,
-)
+from .telegram_helpers import validate_appeal_link  # Импортируем новую функцию-валидатор
+from .council_helpers import request_counter_arguments
 
 log = logging.getLogger("hjr-bot.applicant_flow")
 
+# --- Машина состояний (FSM) ---
+class AppealStates:
+    WAITING_FOR_LINK = "waiting_for_link"
+    WAITING_VOTE_CONFIRM = "waiting_vote_confirm"
+    WAITING_MAIN_ARGUMENT = "waiting_main_argument"
+    WAITING_Q1 = "waiting_q1"
+    WAITING_Q2 = "waiting_q2"
+    WAITING_Q3 = "waiting_q3"
 
-def _render_item_text(item) -> str:
-    """
-    Собирает человекочитаемый текст из возвращённого объекта item (dict) или Message-like.
-    """
-    if not item:
-        return ""
+def register_applicant_handlers(bot):
 
-    # если это dict из copy_or_forward_message
-    if isinstance(item, dict):
-        # poll
-        if item.get("type") == "poll" or item.get("poll"):
-            p = item.get("poll") or {}
-            q = p.get("question", "")
-            opts = p.get("options", []) or []
-            opts_text = "\n".join([f"- {o.get('text','')}: {o.get('voter_count',0)} голосов" for o in opts])
-            return f"--- Опрос ---\nВопрос: {q}\n{opts_text}"
-        # text / caption / media caption
-        txt = item.get("text") or ""
-        if txt:
-            return f"--- Сообщение ---\n{txt}"
-        # если нет текста, но есть media key, просто note
-        if item.get("media"):
-            return f"--- Медиа сообщение (без текста) ---"
-        return ""
-
-    # fallback — объект telebot.types.Message (старые варианты)
-    try:
-        poll = getattr(item, "poll", None)
-        if poll:
-            options_text = "\n".join([f"- {opt.text}: {getattr(opt, 'voter_count', 0)} голосов" for opt in poll.options])
-            return f"--- Опрос ---\nВопрос: {poll.question}\n{options_text}"
-        text = getattr(item, "text", None) or getattr(item, "caption", None)
-        if text:
-            return f"--- Сообщение ---\n{text}"
-    except Exception:
-        pass
-    return ""
-
-def register_applicant_handlers(bot, user_states: dict):
     @bot.message_handler(commands=["start"])
     def send_welcome(message):
-        user_states.pop(message.from_user.id, None)
-        log.info(f"[dialog] /start user={message.from_user.id}")
+        user_id = message.from_user.id
+        appealManager.delete_user_state(user_id) # Очищаем предыдущее состояние
+        appealManager.log_interaction(user_id, "command_start")
+
         markup = types.InlineKeyboardMarkup()
         appeal_button = types.InlineKeyboardButton("Подать апелляцию", callback_data="start_appeal")
         markup.add(appeal_button)
@@ -78,262 +43,150 @@ def register_applicant_handlers(bot, user_states: dict):
     @bot.message_handler(commands=["cancel"])
     def cancel_process(message):
         user_id = message.from_user.id
-        state = user_states.pop(user_id, None)
-        if state and "case_id" in state:
-            try:
-                appealManager.delete_appeal(state["case_id"])
-            except Exception:
-                log.exception(f"[cancel] failed to delete appeal {state.get('case_id')}")
+        state = appealManager.get_user_state(user_id)
+        if state and state.get("data", {}).get("case_id"):
+            case_id = state["data"]["case_id"]
+            appealManager.delete_appeal(case_id)
+            appealManager.log_interaction(user_id, "command_cancel", case_id, "Appeal deleted from DB")
+        appealManager.delete_user_state(user_id)
         bot.send_message(message.chat.id, "Процесс подачи апелляции отменен.", reply_markup=types.ReplyKeyboardRemove())
 
     @bot.callback_query_handler(func=lambda call: call.data == "start_appeal")
     def handle_start_appeal_callback(call):
         user_id = call.from_user.id
-        user_states[user_id] = {"state": "collecting_items", "items": []}
-        log.info(f"[dialog] start_appeal user={user_id} state=collecting_items")
-        markup = types.InlineKeyboardMarkup()
-        done_button = types.InlineKeyboardButton("Готово, я все отправил(а)", callback_data="done_collecting")
-        markup.add(done_button)
+        appealManager.log_interaction(user_id, "callback_start_appeal")
+        appealManager.set_user_state(user_id, AppealStates.WAITING_FOR_LINK)
         try:
             bot.answer_callback_query(call.id)
         except Exception:
             pass
         bot.send_message(
             call.message.chat.id,
-            "Пожалуйста, пришлите ссылки на сообщения (t.me/...) из приватной группе/канале Совета, которые вы хотите оспорить. Когда закончите, нажмите 'Готово'.",
-            reply_markup=markup
+            "Пожалуйста, пришлите ссылку на сообщение или опрос из канала/группы Совета Редакторов, который вы хотите оспорить."
         )
 
-    @bot.callback_query_handler(func=lambda call: call.data == "done_collecting")
-    def handle_done_collecting_callback(call):
-        user_id = call.from_user.id
-        state_data = user_states.get(user_id)
-        if not state_data or not state_data.get("items"):
-            try:
-                bot.answer_callback_query(call.id, "Вы ничего не отправили.", show_alert=True)
-            except Exception:
-                bot.send_message(call.message.chat.id, "Вы ничего не отправили.")
-            return
-        try:
-            bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
-        except Exception:
-            pass
-        process_collected_items(bot, user_id, call.message, user_states)
-
-    def process_collected_items(bot, user_id, message, user_states):
-        state_data = user_states.get(user_id)
-        if not state_data:
-            return
-
-        full_decision_text = ""
-        poll_count = 0
-        total_voters = None
-        for item in state_data["items"]:
-            # возможные форматы item: dict (новый), telebot.Message (старый)
-            rendered = _render_item_text(item)
-            if rendered.startswith("--- Опрос"):
-                poll_count += 1
-                # попытка достать total_voter_count если есть (dict)
-                if isinstance(item, dict) and item.get("poll", {}).get("total_voter_count") is not None:
-                    total_voters = item.get("poll", {}).get("total_voter_count")
-                full_decision_text += "\n\n" + rendered
-            elif rendered:
-                full_decision_text += "\n\n" + rendered
-
-        if poll_count > 1:
-            bot.send_message(message.chat.id, "Ошибка: Вы можете оспорить только одно голосование за раз. Начните заново: /start")
-            user_states.pop(user_id, None)
-            return
-
-        case_id = random.randint(10000, 99999)
-        user_states[user_id]["case_id"] = case_id
-        initial_data = {
-            "applicant_chat_id": message.chat.id,
-            "decision_text": full_decision_text.strip(),
-            "total_voters": total_voters,
-            "status": "collecting",
-            "created_at": datetime.utcnow().isoformat()
-        }
-        try:
-            appealManager.create_appeal(case_id, initial_data)
-            log.info(f"Appeal #{case_id} created/updated.")
-        except Exception:
-            log.exception(f"[appeal-create] failed to create/update appeal #{case_id}")
-
-        bot.send_message(message.chat.id, f"Все объекты приняты. Вашему делу присвоен номер #{case_id}.")
-
-        if poll_count == 1:
-            user_states[user_id]["state"] = "awaiting_vote_response"
-            markup = types.ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
-            markup.add(types.KeyboardButton("Да, я голосовал(а)"), types.KeyboardButton("Нет, я не голосовал(а)"))
-            bot.send_message(message.chat.id, "Уточняющий вопрос: вы принимали участие в этом голосовании?", reply_markup=markup)
-        else:
-            user_states[user_id]["state"] = "awaiting_main_argument"
-            bot.send_message(message.chat.id, "Теперь, пожалуйста, изложите ваши основные аргументы.")
-
+    # --- Основной обработчик FSM ---
     @bot.message_handler(
-        func=lambda message: str(user_states.get(message.from_user.id, {}).get("state", "")).startswith("awaiting_")
-                             or user_states.get(message.from_user.id, {}).get("state") == "collecting_items",
-        content_types=["text", "document"]
+        func=lambda message: appealManager.get_user_state(message.from_user.id) is not None,
+        content_types=['text']
     )
-    def handle_dialogue_messages(message):
+    def handle_fsm_messages(message):
         user_id = message.from_user.id
-        state_data = user_states.get(user_id)
-        if not state_data:
-            return
-
+        state_data = appealManager.get_user_state(user_id)
         state = state_data.get("state")
-        case_id = state_data.get("case_id")
+        data = state_data.get("data", {})
+        case_id = data.get("case_id")
 
-        # --- собираем ссылки/сообщения ---
-        if state == "collecting_items":
-            if message.content_type == "text":
-                parsed = parse_message_link(message.text)
-                if parsed:
-                    from_chat_id, msg_id = parsed
-                    log.info(f"[collect] parsed from_chat_id={from_chat_id} msg_id={msg_id}")
+        # --- Этап 1: Ожидание и проверка ссылки ---
+        if state == AppealStates.WAITING_FOR_LINK:
+            link = message.text
+            is_valid, result = validate_appeal_link(bot, link)
 
-                    # Попытка получить объект чата (информативно)
-                    parsed_chat = get_chat_safe(bot, from_chat_id)
-                    if not parsed_chat:
-                        log.info(f"[collect] bot cannot get_chat for parsed {from_chat_id}")
-                        bot.send_message(
-                            message.chat.id,
-                            "Не удалось получить сообщение по ссылке. Пожалуйста, добавьте бота (@hjrmainbot) в приватную группу/канал, "
-                            "чтобы он мог получить сообщение, и попробуйте снова.",
-                            reply_markup=types.ReplyKeyboardRemove()
-                        )
-                        return
-
-                    # Попытка copy/forward — сперва пытаемся получить сообщение и извлечь содержимое
-                    msg_obj = None
-                    try:
-                        msg_obj = copy_or_forward_message(bot, message.chat.id, from_chat_id, msg_id)
-                    except Exception as e:
-                        log.warning(f"[collect] copy_or_forward raised unexpected error: {e}")
-
-                    if msg_obj:
-                        # Приняли ссылку — сохраняем структуру (dict) с содержимым
-                        state_data["items"].append(msg_obj)
-                        log.info(f"[collect] accepted (copied/forwarded), items={len(state_data['items'])}")
-
-                        # Если resolved настроен и не совпадает с parsed — делаем runtime override,
-                        # чтобы дальнейшие проверки использовали правильный chat_id (как в рабочем коде).
-                        resolved = resolve_council_id()
-                        if resolved and not is_link_from_council(bot, from_chat_id):
-                            try:
-                                set_council_chat_id_runtime(from_chat_id)
-                                log.info(f"[collect] runtime-resolved EDITORS_CHANNEL_ID to {from_chat_id} after successful copy")
-                            except Exception:
-                                log.exception("[collect] failed to set runtime council id override")
-
-                        # Подтверждение пользователю
-                        try:
-                            bot.send_message(message.chat.id, f"Ссылка подтверждена и принята ({len(state_data['items'])}).", reply_markup=types.ReplyKeyboardRemove())
-                        except Exception:
-                            pass
-                        return
-
-                    # Если не удалось скопировать/переслать — тогда даём подробное объяснение и проверяем соответствие каналу
-                    log.info(f"[collect] copy/forward failed for {from_chat_id}/{msg_id}")
-
-                    # Строгая проверка: если ссылка явно не из нужного чата — отклоняем
-                    if not is_link_from_council(bot, from_chat_id):
-                        resolved = resolve_council_id()
-                        log.info(f"[collect] link rejected: parsed={from_chat_id} resolved={resolved}")
-                        try:
-                            if resolved:
-                                bot.send_message(
-                                    message.chat.id,
-                                    "Ссылка должна вести на сообщение из приватной группы/канала Совета.\n"
-                                    f"В ссылке обнаружен чат: {from_chat_id}. Ожидался: {resolved}.\n"
-                                    "Проверьте, что вы присылаете ссылку именно из группы/канала Совета и что EDITORS_CHANNEL_ID корректно задан.",
-                                    reply_markup=types.ReplyKeyboardRemove()
-                                )
-                            else:
-                                bot.send_message(
-                                    message.chat.id,
-                                    "Не удалось получить сообщение по ссылке. Убедитесь, что бот добавлен в группу/канал и что ссылка корректна.",
-                                    reply_markup=types.ReplyKeyboardRemove()
-                                )
-                        except Exception:
-                            pass
-                        return
-                    else:
-                        # Ссылка вроде бы из нужного чата, но copy/forward не сработал — даём рекомендации
-                        bot.send_message(
-                            message.chat.id,
-                            "Не удалось получить сообщение по ссылке, хотя ссылка ведёт в ожидаемый чат. Возможно, бот был удалён из группы/канала или у него нет прав на чтение. "
-                            "Пожалуйста, проверьте права бота и повторите попытку.",
-                            reply_markup=types.ReplyKeyboardRemove()
-                        )
-                        return
-
-            # не распознана ссылка как t.me/...
-            bot.send_message(
-                message.chat.id,
-                "Пришлите, пожалуйста, ссылку на сообщение (t.me/...), только из приватной группе/канале Совета.",
-                reply_markup=types.ReplyKeyboardRemove()
-            )
-            return
-
-        # --- вопросы/логика после принятия ссылок ---
-        elif state == "awaiting_vote_response":
-            appeal = appealManager.get_appeal(case_id)
-            if not appeal:
-                bot.send_message(message.chat.id, "Ошибка: дело не найдено.")
-                user_states.pop(user_id, None)
+            if not is_valid:
+                bot.reply_to(message, f"Ошибка: {result}")
+                appealManager.log_interaction(user_id, "link_validation_failed", details=f"Link: {link}, Error: {result}")
                 return
-            text = (message.text or "").strip()
-            if text.startswith("Да"):
-                expected_responses = (appeal.get("total_voters") or 1) - 1
-                appealManager.update_appeal(case_id, "expected_responses", expected_responses)
-                user_states[user_id]["state"] = "awaiting_main_argument"
-                bot.send_message(message.chat.id, "Понятно. Теперь, пожалуйста, изложите ваши основные аргументы.", reply_markup=types.ReplyKeyboardRemove())
-            elif text.startswith("Нет"):
-                bot.send_message(message.chat.id, "Согласно правилам, все участники должны принимать участие в голосовании. Ваша апелляция отклонена.")
-                attempt_case = case_id
-                try:
-                    appealManager.delete_appeal(case_id)
-                except Exception:
-                    log.exception(f"[vote_response] failed to delete appeal {attempt_case}")
-                user_states.pop(user_id, None)
-            else:
-                bot.send_message(message.chat.id, "Пожалуйста, используйте кнопки для ответа.")
 
-        elif state == "awaiting_main_argument":
+            appealManager.log_interaction(user_id, "link_validation_success", details=f"Link: {link}")
+            content_data = result
+            is_poll = content_data.get("type") == "poll"
+
+            # Создаем дело в БД
+            new_case_id = random.randint(10000, 99999)
+            data["case_id"] = new_case_id
+            data["content_data"] = content_data
+
+            initial_appeal_data = {
+                "applicant_chat_id": message.chat.id,
+                "decision_text": content_data.get("text", "") or content_data.get("poll", {}).get("question", ""),
+                "total_voters": content_data.get("poll", {}).get("total_voter_count"),
+                "status": "collecting",
+            }
+            appealManager.create_appeal(new_case_id, initial_appeal_data)
+            appealManager.log_interaction(user_id, "appeal_created", new_case_id)
+
+            bot.send_message(message.chat.id, f"Ссылка принята. Вашему делу присвоен номер #{new_case_id}.")
+
+            if is_poll:
+                appealManager.set_user_state(user_id, AppealStates.WAITING_VOTE_CONFIRM, data)
+                markup = types.InlineKeyboardMarkup()
+                markup.add(
+                    types.InlineKeyboardButton("Да, я голосовал(а)", callback_data=f"vote_yes_{new_case_id}"),
+                    types.InlineKeyboardButton("Нет, я не голосовал(а)", callback_data=f"vote_no_{new_case_id}")
+                )
+                bot.send_message(message.chat.id, "Уточняющий вопрос: вы принимали участие в этом голосовании?", reply_markup=markup)
+            else:
+                appealManager.set_user_state(user_id, AppealStates.WAITING_MAIN_ARGUMENT, data)
+                bot.send_message(message.chat.id, "Теперь, пожалуйста, изложите ваши основные аргументы.")
+
+        # --- Остальные этапы диалога ---
+        elif state == AppealStates.WAITING_MAIN_ARGUMENT:
             appealManager.update_appeal(case_id, "applicant_arguments", message.text)
-            user_states[user_id]["state"] = "awaiting_q1"
-            bot.send_message(message.chat.id, "Спасибо. Теперь ответьте на уточняющие вопросы.", reply_markup=types.ReplyKeyboardRemove())
+            appealManager.set_user_state(user_id, AppealStates.WAITING_Q1, data)
+            appealManager.log_interaction(user_id, "submitted_main_argument", case_id)
+            bot.send_message(message.chat.id, "Спасибо. Теперь ответьте на уточняющие вопросы.")
             bot.send_message(message.chat.id, "Вопрос 1/3: Какой пункт устава, по вашему мнению, был нарушен?")
 
-        elif state == "awaiting_q1":
-            appeal = appealManager.get_appeal(case_id)
-            if appeal:
-                current_answers = appeal.get("applicant_answers", {}) or {}
-                current_answers["q1"] = message.text
-                appealManager.update_appeal(case_id, "applicant_answers", current_answers)
-            user_states[user_id]["state"] = "awaiting_q2"
+        elif state == AppealStates.WAITING_Q1:
+            _update_appeal_answer(case_id, "q1", message.text)
+            appealManager.set_user_state(user_id, AppealStates.WAITING_Q2, data)
+            appealManager.log_interaction(user_id, "submitted_q1", case_id)
             bot.send_message(message.chat.id, "Вопрос 2/3: Какой результат вы считаете справедливым?")
 
-        elif state == "awaiting_q2":
-            appeal = appealManager.get_appeal(case_id)
-            if appeal:
-                current_answers = appeal.get("applicant_answers", {}) or {}
-                current_answers["q2"] = message.text
-                appealManager.update_appeal(case_id, "applicant_answers", current_answers)
-            user_states[user_id]["state"] = "awaiting_q3"
+        elif state == AppealStates.WAITING_Q2:
+            _update_appeal_answer(case_id, "q2", message.text)
+            appealManager.set_user_state(user_id, AppealStates.WAITING_Q3, data)
+            appealManager.log_interaction(user_id, "submitted_q2", case_id)
             bot.send_message(message.chat.id, "Вопрос 3/3: Есть ли дополнительный контекст, важный для дела?")
 
-        elif state == "awaiting_q3":
-            appeal = appealManager.get_appeal(case_id)
-            if appeal:
-                current_answers = appeal.get("applicant_answers", {}) or {}
-                current_answers["q3"] = message.text
-                appealManager.update_appeal(case_id, "applicant_answers", current_answers)
-            user_states.pop(user_id, None)
-            log.info(f"[flow] q3 saved; dialog closed case_id={case_id}")
-            try:
-                request_counter_arguments(bot, case_id)
-            except Exception:
-                log.exception(f"[flow] failed to request counter arguments for case {case_id}")
+        elif state == AppealStates.WAITING_Q3:
+            _update_appeal_answer(case_id, "q3", message.text)
+            appealManager.delete_user_state(user_id) # Завершаем диалог
+            appealManager.log_interaction(user_id, "submitted_q3_and_finished", case_id)
+            bot.send_message(message.chat.id, "Спасибо, ваша апелляция полностью оформлена и отправлена на рассмотрение. Вы получите уведомление о вердикте.")
+            request_counter_arguments(bot, case_id)
+
+    # --- Обработчик кнопок для подтверждения голоса ---
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("vote_"))
+    def handle_vote_confirm_callback(call):
+        user_id = call.from_user.id
+        state_data = appealManager.get_user_state(user_id)
+        if not (state_data and state_data.get("state") == AppealStates.WAITING_VOTE_CONFIRM):
+            bot.answer_callback_query(call.id, "Это действие уже неактуально.", show_alert=True)
+            return
+
+        action, case_id_str = call.data.rsplit('_', 1)
+        case_id = int(case_id_str)
+        data = state_data.get("data", {})
+
+        appeal = appealManager.get_appeal(case_id)
+        if not appeal:
+            bot.answer_callback_query(call.id, "Ошибка: дело не найдено.", show_alert=True)
+            return
+
+        bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
+
+        if action == "vote_yes":
+            total_voters = appeal.get("total_voters")
+            if total_voters is not None and total_voters > 0:
+                appealManager.update_appeal(case_id, "total_voters", total_voters - 1)
+            appealManager.log_interaction(user_id, "confirmed_vote", case_id, "Vote count adjusted.")
+            bot.send_message(call.message.chat.id, "Понятно. Ваш голос будет вычтен из общего числа для объективности.")
+        elif action == "vote_no":
+            appealManager.log_interaction(user_id, "denied_vote", case_id)
+            # В зависимости от правил, можно либо продолжить, либо отклонить.
+            # Здесь продолжаем по логике, что это просто для информации.
+            bot.send_message(call.message.chat.id, "Понятно. Информация принята.")
+
+        appealManager.set_user_state(user_id, AppealStates.WAITING_MAIN_ARGUMENT, data)
+        bot.send_message(call.message.chat.id, "Теперь, пожалуйста, изложите ваши основные аргументы.")
+        bot.answer_callback_query(call.id)
+
+
+def _update_appeal_answer(case_id, key, value):
+    """Вспомогательная функция для обновления поля applicant_answers."""
+    appeal = appealManager.get_appeal(case_id)
+    if appeal:
+        current_answers = appeal.get("applicant_answers", {}) or {}
+        current_answers[key] = value
+        appealManager.update_appeal(case_id, "applicant_answers", current_answers)

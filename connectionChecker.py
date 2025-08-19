@@ -15,10 +15,13 @@ def _normalize_dsn(dsn: str) -> str:
 
 def _create_and_migrate_tables(conn: psycopg.Connection):
     """
-    Создаёт таблицу appeals и добавляет недостающие колонки.
+    Создаёт или обновляет все необходимые таблицы:
+    - appeals: для хранения дел.
+    - user_states: для отказоустойчивого хранения состояний диалога (FSM).
+    - interaction_logs: для логирования всех действий.
     """
     with conn.cursor() as cur:
-        # Создаем таблицу, если ее нет
+        # 1. Таблица для апелляций
         cur.execute("""
                     CREATE TABLE IF NOT EXISTS appeals (
                                                            case_id INTEGER PRIMARY KEY,
@@ -35,12 +38,35 @@ def _create_and_migrate_tables(conn: psycopg.Connection):
                                                            ai_verdict TEXT
                     );
                     """)
+
+        # 2. Таблица для хранения состояний FSM
+        cur.execute("""
+                    CREATE TABLE IF NOT EXISTS user_states (
+                                                               user_id BIGINT PRIMARY KEY,
+                                                               state VARCHAR(255),
+                        data JSONB,
+                        updated_at TIMESTAMPTZ DEFAULT NOW()
+                        );
+                    """)
+
+        # 3. Таблица для логирования взаимодействий
+        cur.execute("""
+                    CREATE TABLE IF NOT EXISTS interaction_logs (
+                                                                    log_id SERIAL PRIMARY KEY,
+                                                                    user_id BIGINT,
+                                                                    case_id INTEGER,
+                                                                    action VARCHAR(255),
+                        details TEXT,
+                        created_at TIMESTAMPTZ DEFAULT NOW()
+                        );
+                    """)
+
     conn.commit()
-    print("Проверка и миграция таблицы 'appeals' завершена.")
+    print("Проверка и миграция таблиц 'appeals', 'user_states', 'interaction_logs' завершена.")
 
 def check_db_connection() -> bool:
     """
-    Устанавливает соединение с PostgreSQL и проверяет структуру таблицы.
+    Устанавливает соединение с PostgreSQL и проверяет структуру таблиц.
     """
     global db_conn
     dsn = _normalize_dsn(os.getenv("DATABASE_URL"))
@@ -48,9 +74,10 @@ def check_db_connection() -> bool:
         print("[ОШИБКА] PostgreSQL: Не найдена переменная окружения DATABASE_URL.")
         return False
     try:
+        # Используем autocommit=True для простоты в рамках этого модуля
         db_conn = psycopg.connect(dsn, autocommit=True)
         _create_and_migrate_tables(db_conn)
-        print("[OK] PostgreSQL: Соединение установлено и таблица проверена.")
+        print("[OK] PostgreSQL: Соединение установлено и таблицы проверены.")
         return True
     except Exception as e:
         print(f"[ОШИБКА] PostgreSQL: Не удалось подключиться или настроить таблицу. {e}")
