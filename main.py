@@ -9,11 +9,15 @@ from flask import Flask, request, abort
 import telebot
 
 # --- ГЛОБАЛЬНАЯ ПЕРЕМЕННАЯ ДЛЯ ХЭША КОММИТА ---
-COMMIT_HASH = "unknown"
+COMMIT_HASH = "N/A"
 try:
+    # Проверяем, что мы находимся в git-репозитории
+    subprocess.check_output(['git', 'rev-parse', '--is-inside-work-tree'], stderr=subprocess.STDOUT)
     COMMIT_HASH = subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD']).decode('ascii').strip()
-except Exception as e:
-    print(f"[WARN] Не удалось получить Git-коммит: {e}")
+    print(f"[INFO] Git-коммит успешно определен: {COMMIT_HASH}")
+except (subprocess.CalledProcessError, FileNotFoundError):
+    print(f"[WARN] Не удалось получить Git-коммит. Установлено значение по умолчанию: {COMMIT_HASH}")
+
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
@@ -54,6 +58,7 @@ def health_check():
 # --- Фоновые задачи ---
 def startup_and_timer_tasks():
     from handlers.council_flow import finalize_appeal
+    from handlers.admin_flow import sync_editors_list # <-- ИМПОРТИРУЕМ ФУНКЦИЮ
 
     log.info("Запуск фоновых задач...")
     time.sleep(3)
@@ -61,6 +66,10 @@ def startup_and_timer_tasks():
     if not connectionChecker.check_all_apis(bot):
         log.error("Проверка API провалилась. Бот может работать некорректно.")
         return
+
+    # --- ИЗМЕНЕНИЕ: Синхронизация редакторов при старте ---
+    log.info("Запуск первоначальной синхронизации списка редакторов...")
+    sync_editors_list(bot)
 
     if WEBHOOK_BASE_URL:
         webhook_url = f"{WEBHOOK_BASE_URL.strip('/')}/webhook/{TELEGRAM_TOKEN}"
@@ -83,7 +92,7 @@ def startup_and_timer_tasks():
             for appeal in expired_appeals:
                 case_id = appeal['case_id']
                 log.info(f"Найден просроченный таймер для дела #{case_id}. Запускаю финальное рассмотрение.")
-                finalize_appeal(case_id, bot, COMMIT_HASH)
+                finalize_appeal(case_id, bot)
         except Exception as e:
             log.error(f"Ошибка в фоновой задаче проверки таймеров: {e}")
         time.sleep(60)

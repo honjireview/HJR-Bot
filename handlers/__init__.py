@@ -1,17 +1,14 @@
 # -*- coding: utf-8 -*-
 
-# Этот файл делает папку 'handlers' Python-пакетом
-# и собирает все обработчики из других файлов.
-
 def register_all_handlers(bot):
     """
     Регистрирует все обработчики из всех модулей.
     Импорты модулей происходят внутри, чтобы избежать циклических зависимостей.
     """
-    # ВАЖНО: Импортируем модули с хэндлерами здесь
     from . import applicant_flow
     from . import council_flow
     from . import textcrafter_flow
+    from . import admin_flow # <-- ДОБАВЛЕНО
 
     @bot.message_handler(commands=['help'])
     def send_help_text(message):
@@ -27,9 +24,15 @@ def register_all_handlers(bot):
 Этот модуль позволяет подать апелляцию на решение Совета Редакторов. Процесс полностью автоматизирован и проходит в несколько этапов для обеспечения объективности.
 
 *Основные команды:*
-• `/start` - Начать новую процедуру подачи апелляции.
+• `/start` - Начать новую процедуру подачи апелляции (только для редакторов).
 • `/cancel` - Полностью отменить текущий процесс подачи апелляции на любом этапе.
-• `/reply [номер_дела]` - (Только для редакторов) Подать контраргументы по конкретному делу.
+• `/reply [номер_дела]` - Подать контраргументы по конкретному делу (только для редакторов).
+
+---
+
+*Управление*
+
+• `/sync_editors` - Принудительно обновить список редакторов в базе данных (доступно редакторам, кулдаун 2 часа).
 
 ---
 
@@ -42,15 +45,6 @@ def register_all_handlers(bot):
 • `/tsettings` - Настроить канал по умолчанию для отправки постов.
 • `/tpreview` - Посмотреть, как будет выглядеть пост перед отправкой.
 • `/tcancel` - Отменить процесс создания поста.
-
----
-
-*Открытый исходный код*
-
-Весь мой код полностью открыт. Вы можете посмотреть, как я устроен, предложить улучшения или использовать его для своих проектов.
-
-Ссылка на репозиторий:
-https://github.com/honjireview/HJR-Bot
 """
         bot.send_message(message.chat.id, help_text, disable_web_page_preview=True)
 
@@ -64,3 +58,4 @@ https://github.com/honjireview/HJR-Bot
     applicant_flow.register_applicant_handlers(bot)
     council_flow.register_council_handlers(bot)
     textcrafter_flow.register_textcrafter_handlers(bot)
+    admin_flow.register_admin_handlers(bot) # <-- ДОБАВЛЕНО
