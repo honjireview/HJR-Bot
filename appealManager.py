@@ -4,10 +4,14 @@ import os
 import json
 import psycopg
 from datetime import datetime
+from telebot import types
+
 import connectionChecker
+from handlers.council_helpers import resolve_council_id
+
+log = logging.getLogger("hjr-bot.appeal_manager")
 
 def _get_conn():
-    """Возвращает текущее соединение из connectionChecker."""
     conn = connectionChecker.db_conn
     if conn is None or conn.closed:
         if connectionChecker.check_db_connection():
@@ -16,8 +20,8 @@ def _get_conn():
             raise RuntimeError("Не удалось восстановить соединение с БД.")
     return conn
 
+# ... (все функции до is_user_an_editor остаются без изменений) ...
 def create_appeal(case_id, initial_data):
-    """Создаёт новую запись об апелляции в БД."""
     try:
         conn = _get_conn()
         with conn.cursor() as cur:
@@ -27,10 +31,8 @@ def create_appeal(case_id, initial_data):
                 INSERT INTO appeals (case_id, applicant_chat_id, decision_text, status, created_at, applicant_info, total_voters)
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (case_id) DO UPDATE SET
-                    applicant_chat_id = EXCLUDED.applicant_chat_id,
-                                                 decision_text = EXCLUDED.decision_text,
-                                                 status = EXCLUDED.status,
-                                                 created_at = EXCLUDED.created_at,
+                    applicant_chat_id = EXCLUDED.applicant_chat_id, decision_text = EXCLUDED.decision_text,
+                                                 status = EXCLUDED.status, created_at = EXCLUDED.created_at,
                                                  applicant_info = EXCLUDED.applicant_info;
                 """,
                 (case_id, initial_data.get('applicant_chat_id'), initial_data.get('decision_text'),
@@ -42,7 +44,6 @@ def create_appeal(case_id, initial_data):
         print(f"[ОШИБКА] Не удалось создать апелляцию #{case_id}: {e}")
 
 def get_appeal(case_id):
-    """Возвращает данные по конкретному делу из БД."""
     try:
         conn = _get_conn()
         with conn.cursor() as cur:
@@ -56,7 +57,6 @@ def get_appeal(case_id):
     return None
 
 def update_appeal(case_id, key, value):
-    """Обновляет одно поле в существующей апелляции в БД."""
     try:
         conn = _get_conn()
         with conn.cursor() as cur:
@@ -71,7 +71,6 @@ def update_appeal(case_id, key, value):
         print(f"[ОШИБКА] Не удалось обновить дело #{case_id} (поле {key}): {e}")
 
 def add_council_answer(case_id, answer_data):
-    """Добавляет ответ от редактора в список ответов."""
     try:
         appeal = get_appeal(case_id)
         if appeal:
@@ -82,7 +81,6 @@ def add_council_answer(case_id, answer_data):
         print(f"[ОШИБКА] Не удалось добавить ответ в дело #{case_id}: {e}")
 
 def delete_appeal(case_id):
-    """Удаляет дело из БД."""
     try:
         conn = _get_conn()
         with conn.cursor() as cur:
@@ -92,7 +90,6 @@ def delete_appeal(case_id):
         print(f"[ОШИБКА] Не удалось удалить дело #{case_id}: {e}")
 
 def get_expired_appeals():
-    """Возвращает все дела, у которых истек таймер."""
     try:
         conn = _get_conn()
         with conn.cursor() as cur:
@@ -106,7 +103,6 @@ def get_expired_appeals():
     return []
 
 def get_active_appeal_by_user(user_id):
-    """Ищет активную (не 'closed') апелляцию от пользователя."""
     try:
         conn = _get_conn()
         with conn.cursor() as cur:
@@ -121,7 +117,6 @@ def get_active_appeal_by_user(user_id):
     return None
 
 def get_user_state(user_id):
-    """Получает состояние пользователя из БД."""
     try:
         conn = _get_conn()
         with conn.cursor() as cur:
@@ -134,7 +129,6 @@ def get_user_state(user_id):
     return None
 
 def set_user_state(user_id, state, data=None):
-    """Сохраняет состояние пользователя в БД."""
     try:
         conn = _get_conn()
         with conn.cursor() as cur:
@@ -153,7 +147,6 @@ def set_user_state(user_id, state, data=None):
         print(f"[ОШИБКА] Не удалось установить состояние для user_id {user_id}: {e}")
 
 def delete_user_state(user_id):
-    """Удаляет состояние пользователя из БД."""
     try:
         conn = _get_conn()
         with conn.cursor() as cur:
@@ -163,40 +156,33 @@ def delete_user_state(user_id):
         print(f"[ОШИБКА] Не удалось удалить состояние для user_id {user_id}: {e}")
 
 
-# --- Управление Редакторами (Авторизация) ---
-def update_editor_list(editors):
-    """Полностью перезаписывает список редакторов в БД."""
+def is_user_an_editor(bot, user_id):
+    """Проверяет, является ли пользователь участником чата редакторов, с подробным логированием."""
+    log.info(f"--- [AUTH_CHECK] Начало проверки для user_id: {user_id} ---")
+
+    log.info("[AUTH_CHECK] Шаг 1: Определение ID чата редакторов...")
+    chat_id = resolve_council_id()
+    if not chat_id:
+        log.error("[AUTH_CHECK] ПРОВАЛ: ID чата редакторов не настроен (EDITORS_GROUP_ID).")
+        return False
+    log.info(f"[AUTH_CHECK] Шаг 1 OK: ID чата определён как {chat_id}.")
+
     try:
-        conn = _get_conn()
-        with conn.cursor() as cur:
-            cur.execute("TRUNCATE TABLE editors;")
-            if not editors:
-                print("Список редакторов для обновления пуст.")
-                return
+        log.info(f"[AUTH_CHECK] Шаг 2: Отправка запроса get_chat_member в Telegram API для user_id {user_id} в чате {chat_id}...")
+        member = bot.get_chat_member(chat_id, user_id)
+        status = member.status
+        log.info(f"[AUTH_CHECK] Шаг 3: Ответ от API получен. Статус пользователя: '{status}'.")
 
-            editor_data = []
-            for editor in editors:
-                editor_data.append((editor.user.id, editor.user.username, editor.user.first_name))
-
-            # Используем быстрый метод COPY для вставки данных
-            with cur.copy("COPY editors (user_id, username, first_name) FROM STDIN") as copy:
-                for record in editor_data:
-                    copy.write_row(record)
-        conn.commit()
-        print(f"Список редакторов обновлен. Загружено {len(editors)} пользователей.")
+        # Участником считается любой, кроме тех, кто вышел или был забанен
+        is_member = status in ['creator', 'administrator', 'member']
+        log.info(f"[AUTH_CHECK] Шаг 4: Результат проверки: {is_member}.")
+        log.info(f"--- [AUTH_CHECK] Проверка для {user_id} успешно завершена. ---")
+        return is_member
     except Exception as e:
-        print(f"[ОШИБКА] Не удалось обновить список редакторов: {e}")
-
-def is_user_an_editor(user_id):
-    """Проверяет, есть ли user_id в таблице редакторов."""
-    try:
-        conn = _get_conn()
-        with conn.cursor() as cur:
-            cur.execute("SELECT 1 FROM editors WHERE user_id = %s", (user_id,))
-            return cur.fetchone() is not None
-    except Exception as e:
-        print(f"[ОШИБКА] Не удалось проверить права редактора для user_id {user_id}: {e}")
-    return False
+        # Если API возвращает ошибку (например, "user not found"), значит, он не участник
+        log.error(f"[AUTH_CHECK] ПРОВАЛ: Ошибка при вызове get_chat_member для user_id {user_id}. Детали: {e}")
+        log.info(f"--- [AUTH_CHECK] Проверка для {user_id} завершена (с ошибкой). ---")
+        return False
 
 
 def log_interaction(user_id, action, case_id=None, details=""):
