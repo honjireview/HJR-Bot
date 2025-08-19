@@ -41,12 +41,15 @@ def finalize_appeal(case_id, bot):
         log.error(f"Ошибка при отправке вердикта по делу #{case_id}: {e}")
 
 def register_council_handlers(bot):
-    @bot.message_handler(commands=['reply'], chat_types=['group', 'supergroup'])
+    # --- КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: Команда /reply теперь работает только в ЛС ---
+    @bot.message_handler(commands=['reply'], chat_types=['private'])
     def handle_reply_command(message):
         user_id = message.from_user.id
+        log.info(f"[COUNCIL_FLOW] Received /reply command from user {user_id} in private chat.")
+
         m = REPLY_CMD_RE.search(message.text)
         if not m:
-            # Не отвечаем в группе, если команда неполная, чтобы не спамить
+            bot.reply_to(message, "Пожалуйста, укажите номер дела после команды, например: `/reply 12345`", parse_mode="Markdown")
             return
 
         case_id = int(m.group(1))
@@ -55,14 +58,15 @@ def register_council_handlers(bot):
             bot.reply_to(message, f"Дело с номером #{case_id} не найдено.")
             return
 
-        # Начинаем диалог с редактором в ЛИЧНЫХ СООБЩЕНИЯХ
-        try:
-            appealManager.set_user_state(user_id, CouncilStates.AWAITING_MAIN_ARG, data={"case_id": case_id})
-            bot.send_message(user_id, f"Вы отвечаете по делу #{case_id}. Пожалуйста, изложите ваши основные контраргументы.")
-            log.info(f"[FSM-Council] Editor {user_id} started reply for case #{case_id}. Moved to private chat.")
-        except Exception as e:
-            log.error(f"[FSM-Council] Failed to start private dialog with editor {user_id}: {e}")
-            bot.reply_to(message, "Не могу начать диалог с вами в личных сообщениях. Пожалуйста, напишите мне /start в ЛС и попробуйте снова.")
+        if appeal.get('status') != 'collecting':
+            bot.reply_to(message, f"Сбор контраргументов по делу #{case_id} уже завершен.")
+            return
+
+        # Начинаем диалог с редактором
+        appealManager.set_user_state(user_id, CouncilStates.AWAITING_MAIN_ARG, data={"case_id": case_id})
+        bot.send_message(user_id, f"Вы отвечаете по делу #{case_id}. Пожалуйста, изложите ваши основные контраргументы.")
+        log.info(f"[FSM-Council] Editor {user_id} started reply for case #{case_id}.")
+
 
     @bot.message_handler(
         func=lambda message: appealManager.get_user_state(message.from_user.id) is not None and str(appealManager.get_user_state(message.from_user.id).get('state', '')).startswith("council_") and message.chat.type == 'private'
