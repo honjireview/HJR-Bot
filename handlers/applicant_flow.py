@@ -135,26 +135,25 @@ def register_applicant_handlers(bot):
                 bot.send_message(message.chat.id, "Теперь, пожалуйста, изложите ваши основные аргументы.")
 
         elif state == AppealStates.WAITING_MAIN_ARGUMENT:
-            appealManager.update_appeal(case_id, "applicant_arguments", message.text)
+            appealManager.update_appeal(data["case_id"], "applicant_arguments", message.text)
             appealManager.set_user_state(user_id, AppealStates.WAITING_Q1, data)
-            bot.send_message(message.chat.id, "Спасибо. Теперь ответьте на уточняющие вопросы.")
             bot.send_message(message.chat.id, "Вопрос 1/3: Какой пункт устава, по вашему мнению, был нарушен?")
 
         elif state == AppealStates.WAITING_Q1:
-            _update_appeal_answer(case_id, "q1", message.text)
+            _update_appeal_answer(data["case_id"], "q1", message.text)
             appealManager.set_user_state(user_id, AppealStates.WAITING_Q2, data)
             bot.send_message(message.chat.id, "Вопрос 2/3: Какой результат вы считаете справедливым?")
 
         elif state == AppealStates.WAITING_Q2:
-            _update_appeal_answer(case_id, "q2", message.text)
+            _update_appeal_answer(data["case_id"], "q2", message.text)
             appealManager.set_user_state(user_id, AppealStates.WAITING_Q3, data)
             bot.send_message(message.chat.id, "Вопрос 3/3: Есть ли дополнительный контекст, важный для дела?")
 
         elif state == AppealStates.WAITING_Q3:
-            _update_appeal_answer(case_id, "q3", message.text)
+            _update_appeal_answer(data["case_id"], "q3", message.text)
             appealManager.delete_user_state(user_id)
-            bot.send_message(message.chat.id, "Спасибо, ваша апелляция полностью оформлена и отправлена на рассмотрение.")
-            request_counter_arguments(bot, case_id)
+            bot.send_message(message.chat.id, "Спасибо, ваша апелляция полностью оформлена.")
+            request_counter_arguments(bot, data["case_id"])
 
     @bot.callback_query_handler(func=lambda call: call.data.startswith("vote_"))
     def handle_vote_confirm_callback(call):

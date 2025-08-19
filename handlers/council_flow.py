@@ -1,7 +1,4 @@
 # -*- coding: utf-8 -*-
-"""
-Обработчики и логика для потока Совета Редакторов с использованием FSM.
-"""
 import logging
 import re
 from telebot import types
@@ -20,14 +17,10 @@ class CouncilStates:
     AWAITING_Q2 = "council_awaiting_q2"
 
 def finalize_appeal(case_id, bot):
-    """
-    Завершает апелляцию: получает вердикт от Gemini, обновляет статус
-    и отправляет результаты в чаты.
-    """
+    # ... (код без изменений)
     log.info(f"Начало финального рассмотрения дела #{case_id}")
     appeal = appealManager.get_appeal(case_id)
     if not appeal or appeal.get('status') != 'collecting':
-        log.warning(f"Попытка повторно или преждевременно завершить дело #{case_id}.")
         return
 
     appealManager.update_appeal(case_id, "status", "processing")
@@ -41,14 +34,12 @@ def finalize_appeal(case_id, bot):
     appealManager.update_appeal(case_id, "status", "closed")
 
     try:
-        appeal_data = appealManager.get_appeal(case_id)
-        applicant_chat_id = appeal_data.get('applicant_chat_id')
+        applicant_chat_id = appeal.get('applicant_chat_id')
         if applicant_chat_id:
             bot.send_message(applicant_chat_id, f"Ваша апелляция #{case_id} рассмотрена.\n\n{verdict}")
         editors_chat_id = resolve_council_id()
         if editors_chat_id:
             bot.send_message(editors_chat_id, f"Дело #{case_id} закрыто.\n\n{verdict}")
-        log.info(f"Вердикт по делу #{case_id} успешно отправлен.")
     except Exception as e:
         log.error(f"Ошибка при отправке вердикта по делу #{case_id}: {e}")
 
@@ -57,16 +48,17 @@ def register_council_handlers(bot):
     def handle_reply_command(message):
         user_id = message.from_user.id
 
-        if not appealManager.is_user_an_editor(bot, user_id):
+        # --- ИЗМЕНЕНИЕ: Авторизация по базе данных ---
+        if not appealManager.is_user_an_editor(user_id):
             return
 
-        log.info(f"[COUNCIL_FLOW] Received /reply command from editor {user_id}.")
         m = REPLY_CMD_RE.search(message.text)
         if not m:
             bot.reply_to(message, "Пожалуйста, укажите номер дела: `/reply 12345`", parse_mode="Markdown")
             return
 
         case_id = int(m.group(1))
+        # ... (остальной код в функции без изменений)
         appeal = appealManager.get_appeal(case_id)
         if not appeal:
             bot.reply_to(message, f"Дело с номером #{case_id} не найдено.")
@@ -76,13 +68,12 @@ def register_council_handlers(bot):
             return
         appealManager.set_user_state(user_id, CouncilStates.AWAITING_MAIN_ARG, data={"case_id": case_id})
         bot.send_message(user_id, f"Вы отвечаете по делу #{case_id}. Пожалуйста, изложите ваши основные контраргументы.")
-        log.info(f"[FSM-Council] Editor {user_id} started reply for case #{case_id}.")
-
 
     @bot.message_handler(
         func=lambda message: appealManager.get_user_state(message.from_user.id) is not None and str(appealManager.get_user_state(message.from_user.id).get('state', '')).startswith("council_") and message.chat.type == 'private'
     )
     def handle_council_dialogue(message):
+        # ... (код в этой функции без изменений)
         user_id = message.from_user.id
         state_data = appealManager.get_user_state(user_id)
         state = state_data.get("state")
@@ -112,7 +103,5 @@ def register_council_handlers(bot):
             if updated_appeal:
                 num_answers = len(updated_appeal.get('council_answers', []))
                 expected_responses = updated_appeal.get('expected_responses')
-                log.info(f"[FINALIZE_CHECK] Case #{case_id}: Received {num_answers} answers, expecting {expected_responses}.")
                 if expected_responses is not None and num_answers >= expected_responses:
-                    log.info(f"[FINALIZE_CHECK] All responses for case #{case_id} collected. Finalizing early.")
                     finalize_appeal(case_id, bot)

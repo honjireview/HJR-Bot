@@ -9,6 +9,7 @@ db_conn = None
 GEMINI_MODEL_NAME = 'gemini-1.5-pro-latest'
 
 def _normalize_dsn(dsn: str) -> str:
+    # ... (код без изменений)
     if not dsn: return dsn
     if dsn.startswith("postgres://"):
         return dsn.replace("postgres://", "postgresql://", 1)
@@ -19,50 +20,42 @@ def _create_and_migrate_tables(conn: psycopg.Connection):
     Создаёт таблицы и гарантированно добавляет недостающие колонки.
     """
     with conn.cursor() as cur:
-        # 1. Таблица для апелляций
         cur.execute("""
                     CREATE TABLE IF NOT EXISTS appeals (
                                                            case_id INTEGER PRIMARY KEY, applicant_chat_id BIGINT, decision_text TEXT,
                                                            applicant_arguments TEXT, applicant_answers JSONB, council_answers JSONB,
                                                            voters_to_mention TEXT[], total_voters INTEGER, status TEXT,
                                                            expected_responses INTEGER, timer_expires_at TIMESTAMPTZ, ai_verdict TEXT,
-                                                           created_at TIMESTAMPTZ, applicant_info JSONB,
-                                                           commit_hash TEXT, verdict_log_id INTEGER
+                                                           created_at TIMESTAMPTZ, applicant_info JSONB
                     );
                     """)
+        # --- НАДЁЖНАЯ МИГРАЦИЯ ---
+        cur.execute("ALTER TABLE appeals ADD COLUMN IF NOT EXISTS commit_hash TEXT;")
+        cur.execute("ALTER TABLE appeals ADD COLUMN IF NOT EXISTS verdict_log_id INTEGER;")
 
-        # 2. Таблица для FSM
         cur.execute("""
                     CREATE TABLE IF NOT EXISTS user_states (
                                                                user_id BIGINT PRIMARY KEY, state VARCHAR(255), data JSONB,
                         updated_at TIMESTAMPTZ DEFAULT NOW()
                         );
                     """)
-
-        # 3. Таблица для логов (с исправлением)
         cur.execute("""
                     CREATE TABLE IF NOT EXISTS interaction_logs (
-                                                                    log_id SERIAL PRIMARY KEY,
-                                                                    user_id BIGINT NULL, -- ИЗМЕНЕНИЕ: Разрешаем NULL для системных событий
-                                                                    case_id INTEGER,
-                                                                    action VARCHAR(255),
-                        details TEXT,
-                        created_at TIMESTAMPTZ DEFAULT NOW()
+                                                                    log_id SERIAL PRIMARY KEY, user_id BIGINT, case_id INTEGER,
+                                                                    action VARCHAR(255), details TEXT, created_at TIMESTAMPTZ DEFAULT NOW()
                         );
                     """)
-
-        # 4. Таблица для редакторов
         cur.execute("""
                     CREATE TABLE IF NOT EXISTS editors (
                                                            user_id BIGINT PRIMARY KEY, username TEXT, first_name TEXT,
                                                            added_at TIMESTAMPTZ DEFAULT NOW()
                         );
                     """)
-
     conn.commit()
     print("Проверка и миграция всех таблиц завершена.")
 
 def check_db_connection() -> bool:
+    # ... (код без изменений)
     global db_conn
     dsn = _normalize_dsn(os.getenv("DATABASE_URL"))
     if not dsn:
@@ -78,6 +71,7 @@ def check_db_connection() -> bool:
         return False
 
 def check_all_apis(bot) -> bool:
+    # ... (код без изменений)
     print("--- Начало проверки API ---")
     try:
         bot_info = bot.get_me()

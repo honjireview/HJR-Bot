@@ -5,7 +5,7 @@ import appealManager
 from datetime import datetime
 from connectionChecker import GEMINI_MODEL_NAME
 
-# ... (код инициализации gemini_model без изменений)
+# ... (код инициализации без изменений)
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 gemini_model = None
 if GEMINI_API_KEY:
@@ -26,7 +26,7 @@ def _read_file(filename: str, error_message: str) -> str:
         print(f"[ОШИБКА] Файл {filename} не найден.")
         return error_message
 
-def get_verdict_from_gemini(case_id, commit_hash, log_id):
+def get_verdict_from_gemini(case_id):
     """
     Собирает все данные по делу, формирует детальный промпт и получает вердикт от Gemini.
     """
@@ -34,24 +34,27 @@ def get_verdict_from_gemini(case_id, commit_hash, log_id):
     if not appeal:
         return "Ошибка: Не удалось найти данные по делу."
 
+    # --- ИЗМЕНЕНИЕ: Получаем commit_hash и log_id из дела ---
+    commit_hash = appeal.get("commit_hash", "N/A")
+    log_id = appeal.get("verdict_log_id", "N/A")
+
     project_rules = _read_file('rules.txt', "Устав проекта не найден.")
     instructions = _read_file('instructions.txt', "Инструкции для ИИ не найдены.")
 
-    # ... (код формирования applicant_info, date_submitted, applicant_full_text, council_full_text без изменений)
+    # ... (код формирования данных без изменений)
     applicant_info = appeal.get('applicant_info', {})
     applicant_name = f"{applicant_info.get('first_name', 'Имя не указано')} (@{applicant_info.get('username', 'скрыто')})"
     created_at_dt = appeal.get('created_at')
     date_submitted = created_at_dt.strftime('%Y-%m-%d %H:%M UTC') if isinstance(created_at_dt, datetime) else "Неизвестно"
-    applicant_full_text = f"""...""" # (здесь ваш длинный текст)
+    applicant_full_text = f"""...""" # Ваш текст
     council_answers_list = appeal.get('council_answers', [])
     if council_answers_list:
         council_full_text = ""
         for answer in council_answers_list:
-            council_full_text += f"""...""" # (здесь ваш длинный текст)
+            council_full_text += f"""...""" # Ваш текст
     else:
         council_full_text = "Совет не предоставил контраргументов в установленный срок."
 
-    # --- ИЗМЕНЕНИЕ: Подставляем новые переменные в инструкции ---
     final_instructions = instructions.format(case_id=case_id, commit_hash=commit_hash, log_id=log_id)
 
     prompt = f"""
@@ -63,7 +66,7 @@ def get_verdict_from_gemini(case_id, commit_hash, log_id):
 </rules>
 
 **ДЕТАЛИ ДЕЛА №{case_id}**
-# ... (остальной код промпта без изменений)
+# ... (остальной промпт без изменений)
 """
 
     if not gemini_model:
