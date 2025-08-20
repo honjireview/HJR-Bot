@@ -57,9 +57,8 @@ def health_check():
 
 # --- Фоновые задачи ---
 def startup_and_timer_tasks():
-    # ИСПРАВЛЕНО: Импортируем finalize_appeal из geminiProcessor
     from geminiProcessor import finalize_appeal
-    from handlers.admin_flow import sync_editors_list # <-- ИМПОРТИРУЕМ ФУНКЦИЮ
+    from handlers.admin_flow import sync_editors_list
 
     log.info("Запуск фоновых задач...")
     time.sleep(3)
@@ -68,7 +67,6 @@ def startup_and_timer_tasks():
         log.error("Проверка API провалилась. Бот может работать некорректно.")
         return
 
-    # --- ИЗМЕНЕНИЕ: Синхронизация редакторов при старте ---
     log.info("Запуск первоначальной синхронизации списка редакторов...")
     sync_editors_list(bot)
 
@@ -89,14 +87,34 @@ def startup_and_timer_tasks():
     log.info("Запущена фоновая задача проверки таймеров.")
     while True:
         try:
-            expired_appeals = appealManager.get_expired_appeals()
-            for appeal in expired_appeals:
+            # ИСПРАВЛЕНО: Логика таймера полностью переработана
+            appeals_in_collection = appealManager.get_appeals_in_collection()
+            for appeal in appeals_in_collection:
                 case_id = appeal['case_id']
-                log.info(f"Найден просроченный таймер для дела #{case_id}. Запускаю финальное рассмотрение.")
-                # ИСПРАВЛЕНО: Передаем COMMIT_HASH в функцию
-                finalize_appeal(case_id, bot, COMMIT_HASH)
+
+                # Проверяем, существует ли дело, прежде чем работать с ним
+                appeal_data = appealManager.get_appeal(case_id)
+                if not appeal_data:
+                    log.warning(f"Таймер: Дело #{case_id} найдено в списке, но не удалось получить его данные. Пропускаю.")
+                    continue
+
+                # Логика досрочного завершения
+                expected_responses = appeal_data.get('expected_responses')
+                if expected_responses is not None:
+                    council_answers = appeal_data.get('council_answers') or []
+                    if len(council_answers) >= expected_responses:
+                        log.info(f"Досрочное завершение для дела #{case_id}: получено {len(council_answers)}/{expected_responses} ответов.")
+                        finalize_appeal(case_id, bot, COMMIT_HASH)
+                        continue # Переходим к следующему делу
+
+                # Логика завершения по истечении 24 часов
+                expires_at = appeal_data.get('timer_expires_at')
+                if expires_at and datetime.now(expires_at.tzinfo) > expires_at:
+                    log.info(f"Найден просроченный таймер для дела #{case_id}. Запускаю финальное рассмотрение.")
+                    finalize_appeal(case_id, bot, COMMIT_HASH)
+
         except Exception as e:
-            log.error(f"Ошибка в фоновой задаче проверки таймеров: {e}")
+            log.error(f"Критическая ошибка в фоновой задаче проверки таймеров: {e}")
         time.sleep(60)
 
 background_thread = Thread(target=startup_and_timer_tasks, daemon=True)

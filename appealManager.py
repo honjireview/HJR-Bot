@@ -19,7 +19,7 @@ def _get_conn():
             raise RuntimeError("Не удалось восстановить соединение с БД.")
     return conn
 
-# ... (все функции до is_user_an_editor остаются без изменений) ...
+# ... (все функции до get_expired_appeals остаются без изменений) ...
 def create_appeal(case_id, initial_data):
     try:
         conn = _get_conn()
@@ -88,17 +88,19 @@ def delete_appeal(case_id):
     except Exception as e:
         log.error(f"[ОШИБКА] Не удалось удалить дело #{case_id}: {e}")
 
-def get_expired_appeals():
+# ИСПРАВЛЕНО: Функция переименована для ясности
+def get_appeals_in_collection():
+    """Возвращает все апелляции, которые сейчас в стадии сбора контраргументов."""
     try:
         conn = _get_conn()
         with conn.cursor() as cur:
-            cur.execute("SELECT * FROM appeals WHERE status = 'collecting' AND timer_expires_at IS NOT NULL AND timer_expires_at < NOW() AT TIME ZONE 'utc'")
+            cur.execute("SELECT * FROM appeals WHERE status = 'collecting'")
             records = cur.fetchall()
             if not records: return []
             columns = [desc[0] for desc in cur.description]
             return [dict(zip(columns, record)) for record in records]
     except Exception as e:
-        log.error(f"[ОШИБКА] Не удалось получить просроченные апелляции: {e}")
+        log.error(f"[ОШИБКА] Не удалось получить активные апелляции: {e}")
     return []
 
 def get_active_appeal_by_user(user_id):
