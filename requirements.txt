@@ -6,4 +6,4 @@ Flask
 gunicorn
 python-dotenv
 thefuzz
-python-telegraph
+telegraph
