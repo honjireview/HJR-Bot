@@ -11,8 +11,9 @@ telegraph = Telegraph()
 # Попытка создать/получить аккаунт для бота.
 # Это нужно, чтобы в будущем можно было редактировать посты.
 try:
-    telegraph.create_account(short_name='hjr-bot')
-    log.info("Аккаунт Telegraph успешно создан/загружен.")
+    # Используем токен доступа, если он есть, иначе создаем новый анонимный аккаунт
+    access_token = telegraph.create_account(short_name='hjr-bot')
+    log.info(f"Аккаунт Telegraph успешно создан/загружен. Access Token: {access_token}")
 except TelegraphException as e:
     log.warning(f"Не удалось создать аккаунт Telegraph, посты будут анонимными. Ошибка: {e}")
 
@@ -46,13 +47,17 @@ def markdown_to_html(md_text: str) -> str:
     """
     # Важно соблюдать порядок замен, чтобы не было конфликтов
     text = md_text.replace('```\n', '<pre>').replace('\n```', '</pre>').replace('```', '<pre>')
-    text = text.replace('**', '<b>', 1).replace('**', '</b>', 1)
-    while '**' in text:
-        text = text.replace('**', '<b>', 1).replace('**', '</b>', 1)
 
-    text = text.replace('*', '<i>', 1).replace('*', '</i>', 1)
-    while '*' in text:
-        text = text.replace('*', '<i>', 1).replace('*', '</i>', 1)
+    # Заменяем все вхождения, а не по одному
+    parts = text.split('**')
+    for i in range(1, len(parts), 2):
+        parts[i] = f"<b>{parts[i]}</b>"
+    text = "".join(parts)
+
+    parts = text.split('*')
+    for i in range(1, len(parts), 2):
+        parts[i] = f"<i>{parts[i]}</i>"
+    text = "".join(parts)
 
     text = text.replace('\n', '<br>') # Переносы строк
     return text
