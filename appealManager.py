@@ -5,7 +5,8 @@ import json
 import psycopg
 import logging
 from datetime import datetime
-from difflib import SequenceMatcher # Используем для сравнения текстов
+# ИСПРАВЛЕНО: Добавлен недостающий импорт, который вызывал ошибку
+from thefuzz import fuzz
 
 import connectionChecker
 
@@ -13,7 +14,6 @@ log = logging.getLogger("hjr-bot.appeal_manager")
 
 def are_arguments_meaningful(text: str, min_length: int = 20) -> bool:
     # ... (код без изменений) ...
-    """Проверяет, что текст не пустой, не 'тест' и имеет минимальную длину."""
     if not text:
         return False
     text = text.strip().lower()
@@ -23,28 +23,27 @@ def are_arguments_meaningful(text: str, min_length: int = 20) -> bool:
         return False
     return True
 
-# ИСПРАВЛЕНО: Новая функция для поиска похожих апелляций
 def find_similar_appeal(decision_text: str, similarity_threshold=90):
-    """Ищет в базе апелляции с похожим предметом спора."""
+    """Ищет в базе апелляции с похожим предметом спора, используя fuzz.ratio."""
     try:
         conn = _get_conn()
         with conn.cursor() as cur:
-            # ИСПРАВЛЕНО: Убрано условие "WHERE status = 'closed'"
             cur.execute("SELECT case_id, decision_text FROM appeals")
             records = cur.fetchall()
 
             for record in records:
                 case_id, db_text = record
+                if not db_text: continue # Пропускаем, если текст пустой
                 similarity = fuzz.ratio(decision_text, db_text)
                 if similarity >= similarity_threshold:
+                    log.info(f"Найдена похожая апелляция: #{case_id} (схожесть: {similarity}%)")
                     return {"case_id": case_id, "similarity": similarity}
     except Exception as e:
         log.error(f"[ОШИБКА] Не удалось найти похожие апелляции: {e}")
     return None
 
-
+# ... (остальной код файла без изменений) ...
 def _get_conn():
-    # ... (остальной код файла без изменений) ...
     conn = connectionChecker.db_conn
     if conn is None or conn.closed:
         if connectionChecker.check_db_connection():
@@ -58,7 +57,6 @@ def create_appeal(case_id, initial_data):
         conn = _get_conn()
         with conn.cursor() as cur:
             applicant_info_json = json.dumps(initial_data.get('applicant_info', {}))
-            # Добавляем thread_id в базу
             cur.execute(
                 """
                 INSERT INTO appeals (case_id, applicant_chat_id, decision_text, status, created_at, applicant_info, total_voters, message_thread_id)
@@ -95,15 +93,12 @@ def update_appeal(case_id, key, value):
         with conn.cursor() as cur:
             if isinstance(value, (dict, list)):
                 value = json.dumps(value)
-            # Добавляем новую колонку discussion_context
-            if key == 'discussion_context':
-                query = psycopg.sql.SQL("UPDATE appeals SET discussion_context = %s WHERE case_id = %s")
-                cur.execute(query, (value, case_id))
-            else:
-                query = psycopg.sql.SQL("UPDATE appeals SET {key} = %s WHERE case_id = %s").format(
-                    key=psycopg.sql.Identifier(key)
-                )
-                cur.execute(query, (value, case_id))
+
+            # Используем psycopg.sql для безопасной вставки имен колонок
+            query = psycopg.sql.SQL("UPDATE appeals SET {key} = %s WHERE case_id = %s").format(
+                key=psycopg.sql.Identifier(key)
+            )
+            cur.execute(query, (value, case_id))
         conn.commit()
     except Exception as e:
         log.error(f"[ОШИБКА] Не удалось обновить дело #{case_id} (поле {key}): {e}")
@@ -132,7 +127,7 @@ def get_appeals_in_collection():
     try:
         conn = _get_conn()
         with conn.cursor() as cur:
-            cur.execute("SELECT * FROM appeals WHERE status = 'collecting'")
+            cur.execute("SELECT * FROM appeals WHERE status IN ('collecting', 'reviewing')")
             records = cur.fetchall()
             if not records: return []
             columns = [desc[0] for desc in cur.description]
@@ -146,7 +141,7 @@ def get_active_appeal_by_user(user_id):
         conn = _get_conn()
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT case_id FROM appeals WHERE (applicant_info->>'id')::bigint = %s AND status != 'closed'",
+                "SELECT case_id FROM appeals WHERE (applicant_info->>'id')::bigint = %s AND status != 'closed' AND status != 'closed_after_review'",
                 (user_id,)
             )
             record = cur.fetchone()
