@@ -5,3 +5,5 @@ psycopg[binary]
 Flask
 gunicorn
 python-dotenv
+thefuzz
+python-telegraph
