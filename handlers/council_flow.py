@@ -39,8 +39,10 @@ def register_council_handlers(bot):
             bot.reply_to(message, f"Сбор контраргументов по делу #{case_id} уже завершен.")
             return
 
-        data = {"case_id": case_id}
+        # Инициализируем пустое состояние для ответов
+        data = {"case_id": case_id, "answers": {}}
         appealManager.set_user_state(user_id, CouncilStates["MAIN_ARG"], data)
+        log.info(f"[COUNCIL_FLOW] User {user_id} starts reply for case #{case_id}. State set to {CouncilStates['MAIN_ARG']}.")
         bot.send_message(message.chat.id, f"Вы отвечаете по делу #{case_id}.\n\nПожалуйста, изложите ваши основные контраргументы.")
 
     @bot.message_handler(
@@ -53,34 +55,50 @@ def register_council_handlers(bot):
     )
     def handle_council_fsm(message):
         user_id = message.from_user.id
+
+        # ИСПРАВЛЕНО: Блокировка команд во время диалога
+        if message.text.startswith('/'):
+            if message.text.strip() != '/cancel':
+                bot.reply_to(message, "Пожалуйста, завершите процесс ответа или отмените его командой /cancel.")
+            return
+
         state_data = appealManager.get_user_state(user_id)
         state = state_data.get("state")
         data = state_data.get("data", {})
         case_id = data.get("case_id")
 
+        log.info(f"[COUNCIL_FLOW] Handling FSM for user {user_id}, case #{case_id}, state: {state}")
+
         if len(message.text) > CHARACTER_LIMIT:
             bot.reply_to(message, f"Вы превысили лимит символов ({CHARACTER_LIMIT}).")
             return
 
+        # Гарантируем, что у нас есть словарь для ответов
         current_answers = data.get("answers", {})
 
         if state == CouncilStates["MAIN_ARG"]:
             current_answers["main_arg"] = message.text
             data["answers"] = current_answers
-            appealManager.set_user_state(user_id, CouncilStates["Q1"], data)
+            next_state = CouncilStates["Q1"]
+            appealManager.set_user_state(user_id, next_state, data)
+            log.info(f"[COUNCIL_FLOW] User {user_id} provided main_arg for case #{case_id}. New state: {next_state}")
             bot.send_message(message.chat.id, "Вопрос 1/2: На каких пунктах устава или правил основывается ваша позиция?")
 
         elif state == CouncilStates["Q1"]:
             current_answers["q1"] = message.text
             data["answers"] = current_answers
-            appealManager.set_user_state(user_id, CouncilStates["Q2"], data)
+            next_state = CouncilStates["Q2"]
+            appealManager.set_user_state(user_id, next_state, data)
+            log.info(f"[COUNCIL_FLOW] User {user_id} provided q1 for case #{case_id}. New state: {next_state}")
             bot.send_message(message.chat.id, "Вопрос 2/2: Как вы оцениваете аргументы заявителя? Считаете ли вы их релевантными?")
 
         elif state == CouncilStates["Q2"]:
             current_answers["q2"] = message.text
-            responder_info = f"{message.from_user.first_name} (@{message.from_user.username})"
+            responder_info = f"{message.from_user.first_name} (@{message.from_user.username or 'скрыто'})"
             current_answers["responder_info"] = responder_info
 
+            log.info(f"[COUNCIL_FLOW] User {user_id} provided q2 for case #{case_id}. Finalizing and saving answer.")
             appealManager.add_council_answer(case_id, current_answers)
             appealManager.delete_user_state(user_id)
+            log.info(f"[COUNCIL_FLOW] State for user {user_id} deleted. Reply process finished.")
             bot.send_message(message.chat.id, f"Спасибо, ваш ответ по делу #{case_id} принят.")

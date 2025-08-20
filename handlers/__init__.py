@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import appealManager
 
 def register_all_handlers(bot):
     """
@@ -14,7 +15,6 @@ def register_all_handlers(bot):
 
     @bot.message_handler(commands=['help'])
     def send_help_text(message):
-        # ... (текст справки без изменений) ...
         help_text = """
 Здравствуйте! Я бот-ассистент проекта Honji Review. Моя задача — помогать с рутинными процессами и обеспечивать справедливость при помощи ИИ.
 
@@ -47,11 +47,27 @@ TextCrafter (Создание постов)
 """
         bot.send_message(message.chat.id, help_text, disable_web_page_preview=True)
 
-
     @bot.message_handler(commands=['getid'])
     def send_chat_id(message):
         chat_id = message.chat.id
         bot.reply_to(message, f"ID этого чата: `{chat_id}`")
+
+    # ИСПРАВЛЕНО: Универсальный обработчик /cancel
+    @bot.message_handler(commands=['cancel'], chat_types=['private'])
+    def cancel_any_process(message):
+        user_id = message.from_user.id
+        state = appealManager.get_user_state(user_id)
+        if state:
+            # Если в состоянии есть case_id (старая логика апелляций), удаляем дело
+            if state.get("data", {}).get("case_id"):
+                case_id = state["data"]["case_id"]
+                # Проверяем, это апелляция или ответ совета
+                if not str(state.get("state")).startswith("council_"):
+                    appealManager.delete_appeal(case_id)
+            appealManager.delete_user_state(user_id)
+            bot.send_message(message.chat.id, "Текущая операция отменена.")
+        else:
+            bot.send_message(message.chat.id, "У вас нет активных операций, которые можно было бы отменить.")
 
     # --- Регистрация всех потоков ---
     applicant_flow.register_applicant_handlers(bot)

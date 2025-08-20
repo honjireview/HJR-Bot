@@ -104,19 +104,68 @@ def get_verdict_from_gemini(case_id, commit_hash, log_id):
 
 def finalize_appeal(case_id, bot, commit_hash):
     """
-    Получает вердикт от ИИ, сохраняет его, отправляет результаты и закрывает дело.
+    Получает вердикт от ИИ, формирует ПОЛНЫЙ пост и закрывает дело.
     """
     print(f"[FINALIZE] Начинаю финальное рассмотрение дела #{case_id}")
+
+    appeal_data = appealManager.get_appeal(case_id)
+    if not appeal_data:
+        print(f"[CRITICAL_ERROR] Не удалось получить данные по делу #{case_id} для финализации.")
+        appealManager.log_interaction("SYSTEM", "finalize_error_no_case", case_id)
+        return
+
     log_id = appealManager.log_interaction("SYSTEM", "finalize_start", case_id)
 
-    verdict = get_verdict_from_gemini(case_id, commit_hash, log_id)
-    appealManager.update_appeal(case_id, "ai_verdict", verdict)
+    # Получаем вердикт от ИИ
+    ai_verdict_text = get_verdict_from_gemini(case_id, commit_hash, log_id)
+    appealManager.update_appeal(case_id, "ai_verdict", ai_verdict_text)
 
-    applicant_chat_id = appealManager.get_appeal(case_id).get('applicant_chat_id')
+    # --- ИСПРАВЛЕНО: Формирование полного и структурированного поста ---
+
+    # Собираем данные по делу для поста
+    created_at_dt = appeal_data.get('created_at')
+    date_submitted = created_at_dt.strftime('%Y-%m-%d %H:%M UTC') if isinstance(created_at_dt, datetime) else "Неизвестно"
+
+    applicant_answers = appeal_data.get('applicant_answers', {}) or {}
+    applicant_position = (
+        f"*Аргументы:* {appeal_data.get('applicant_arguments', 'не указано')}\n"
+        f"*Нарушенный пункт устава:* {applicant_answers.get('q1', 'не указано')}\n"
+        f"*Справедливый результат:* {applicant_answers.get('q2', 'не указано')}\n"
+        f"*Доп. контекст:* {applicant_answers.get('q3', 'не указано')}"
+    )
+
+    council_answers_list = appeal_data.get('council_answers', []) or []
+    if council_answers_list:
+        council_position = ""
+        for answer in council_answers_list:
+            council_position += (
+                f"\n\n\n*Ответ от {answer.get('responder_info', 'Редактор Совета')}:*\n"
+                f"*Контраргументы:* {answer.get('main_arg', 'не указано')}\n"
+                f"*Обоснование по уставу:* {answer.get('q1', 'не указано')}\n"
+                f"*Оценка аргументов заявителя:* {answer.get('q2', 'не указано')}"
+            )
+    else:
+        council_position = "_Совет не предоставил контраргументов._"
+
+    # Собираем финальное сообщение
+    final_message = (
+        f"⚖️ *Итоги рассмотрения апелляции №{case_id}*\n\n"
+        f"**Дата подачи:** {date_submitted}\n"
+        f"**Версия бота (коммит):** `{commit_hash}`\n"
+        f"**ID Вердикта:** `{log_id}`\n\n"
+        f"--- \n\n"
+        f"📄 **Позиция Заявителя:**\n"
+        f"{applicant_position}\n\n"
+        f"--- \n\n"
+        f"👥 **Позиция Совета Редакторов:**\n"
+        f"{council_position}\n\n"
+        f"--- \n\n"
+        f"🤖 **{ai_verdict_text}**" # Вердикт ИИ теперь является заключительной частью
+    )
+
+    # Отправляем сообщение
+    applicant_chat_id = appeal_data.get('applicant_chat_id')
     appeals_channel_id = os.getenv('APPEALS_CHANNEL_ID')
-
-    verdict_header = f"⚖️ *Вердикт ИИ-арбитра по делу №{case_id}*"
-    final_message = f"{verdict_header}\n\n{verdict}"
 
     try:
         if applicant_chat_id:

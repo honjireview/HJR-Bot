@@ -74,25 +74,26 @@ def register_applicant_handlers(bot):
         bot.answer_callback_query(call.id)
         bot.send_message(call.message.chat.id, "Пожалуйста, пришлите ссылку на сообщение или опрос, решение в котором вы хотите оспорить.\n\nДля отмены в любой момент введите /cancel")
 
-    @bot.message_handler(commands=["cancel"], chat_types=['private'])
-    def cancel_process(message):
-        user_id = message.from_user.id
-        state = appealManager.get_user_state(user_id)
-        if state and state.get("data", {}).get("case_id"):
-            case_id = state["data"]["case_id"]
-            appealManager.delete_appeal(case_id)
-        appealManager.delete_user_state(user_id)
-        bot.send_message(message.chat.id, "Процесс подачи апелляции отменен.")
+    # ИСПРАВЛЕНО: обработчик /cancel перенесен в __init__.py и стал универсальным
+    # @bot.message_handler(commands=["cancel"], chat_types=['private']) ...
 
     @bot.message_handler(
         func=lambda message: (
                 appealManager.get_user_state(message.from_user.id) is not None and
+                not str(appealManager.get_user_state(message.from_user.id).get('state', '')).startswith("council_") and
                 message.chat.type == 'private'
         ),
         content_types=['text']
     )
     def handle_fsm_messages(message):
         user_id = message.from_user.id
+
+        # ИСПРАВЛЕНО: Блокировка команд во время диалога
+        if message.text.startswith('/'):
+            if message.text.strip() != '/cancel':
+                bot.reply_to(message, "Пожалуйста, завершите текущий процесс или отмените его командой /cancel.")
+            return
+
         state_data = appealManager.get_user_state(user_id)
         if not state_data: return
 
