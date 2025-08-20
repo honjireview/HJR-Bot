@@ -4,7 +4,6 @@ import google.generativeai as genai
 import appealManager
 from datetime import datetime
 from precedents import PRECEDENTS
-# ИСПРАВЛЕНО: Указан правильный путь к файлу в папке handlers
 from handlers.telegraph_helpers import post_to_telegraph, markdown_to_html
 
 GEMINI_MODEL_NAME = "models/gemini-1.5-pro-latest"
@@ -80,8 +79,9 @@ def get_verdict_from_gemini(appeal: dict, commit_hash: str, bot_version: str, lo
 
     final_instructions = instructions.format(case_id=case_id, commit_hash=commit_hash, log_id=log_id)
     final_instructions += f"\nВерсия релиза: {bot_version}"
-    final_instructions += "\nОСОБОЕ ВНИМАНИЕ: При анализе строго придерживайтесь определений из раздела 'ТЕРМИНОЛОГИЯ' в уставе."
+    final_instructions += "\nОСОБОЕ ВНИМАНИЕ: При анализе строго придерживайтесь определений из раздела 'ТЕРМИНОЛОГИЯ' в уставе. **Сравни аргументы обеих сторон.**"
 
+    # ИСПРАВЛЕНО: Полностью переработана структура промпта для лучшего понимания ИИ
     prompt = f"""
 {final_instructions}
 {precedents_text}
@@ -95,9 +95,9 @@ def get_verdict_from_gemini(appeal: dict, commit_hash: str, bot_version: str, lo
     ```
     {appeal.get('decision_text', 'не указано')}
     ```
-3.  **Позиция Заявителя (анонимно):**
+3.  **АРГУМЕНТЫ ЗА отмену решения (Позиция Заявителя):**
     {applicant_full_text}
-4.  **Позиция Совета Редакторов:**
+4.  **АРГУМЕНТЫ ПРОТИВ отмены решения (Позиция Совета Редакторов):**
     {council_full_text}
 """
 
