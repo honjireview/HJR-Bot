@@ -8,7 +8,10 @@ def register_all_handlers(bot):
     from . import applicant_flow
     from . import council_flow
     from . import textcrafter_flow
-    from . import admin_flow # <-- ДОБАВЛЕНО
+    from . import admin_flow
+
+    # ИСПРАВЛЕНО: Создаем единый словарь для хранения состояний диалогов
+    user_states = {}
 
     @bot.message_handler(commands=['help'])
     def send_help_text(message):
@@ -51,7 +54,8 @@ TextCrafter (Создание постов)
 
 
     # --- Регистрация всех потоков ---
-    applicant_flow.register_applicant_handlers(bot)
-    council_flow.register_applicant_handlers(bot)
-    textcrafter_flow.register_textcrafter_handlers(bot)
-    admin_flow.register_admin_handlers(bot) # <-- ДОБАВЛЕНО
+    # ИСПРАВЛЕНО: Передаем user_states в функции, которые его требуют
+    applicant_flow.register_applicant_handlers(bot, user_states)
+    council_flow.register_council_handlers(bot) # <-- Имя функции исправлено для ясности
+    textcrafter_flow.register_textcrafter_handlers(bot, user_states)
+    admin_flow.register_admin_handlers(bot)

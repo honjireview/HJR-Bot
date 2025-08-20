@@ -36,7 +36,8 @@ def _render_item_text(item: dict) -> str:
     return "(Не удалось отобразить содержимое)"
 
 
-def register_applicant_handlers(bot):
+# ИСПРАВЛЕНО: Имя функции изменено для ясности и соответствия ее роли
+def register_council_handlers(bot):
     @bot.message_handler(commands=["start"], chat_types=['private'])
     def send_welcome(message):
         user_id = message.from_user.id
