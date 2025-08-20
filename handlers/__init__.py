@@ -3,18 +3,18 @@
 def register_all_handlers(bot):
     """
     Регистрирует все обработчики из всех модулей.
-    Импорты модулей происходят внутри, чтобы избежать циклических зависимостей.
     """
     from . import applicant_flow
     from . import council_flow
     from . import textcrafter_flow
     from . import admin_flow
 
-    # ИСПРАВЛЕНО: Создаем единый словарь для хранения состояний диалогов
+    # user_states нужен только для textcrafter_flow
     user_states = {}
 
     @bot.message_handler(commands=['help'])
     def send_help_text(message):
+        # ... (текст справки без изменений) ...
         help_text = """
 Здравствуйте! Я бот-ассистент проекта Honji Review. Моя задача — помогать с рутинными процессами и обеспечивать справедливость при помощи ИИ.
 
@@ -47,15 +47,14 @@ TextCrafter (Создание постов)
 """
         bot.send_message(message.chat.id, help_text, disable_web_page_preview=True)
 
+
     @bot.message_handler(commands=['getid'])
     def send_chat_id(message):
         chat_id = message.chat.id
         bot.reply_to(message, f"ID этого чата: `{chat_id}`")
 
-
     # --- Регистрация всех потоков ---
-    # ИСПРАВЛЕНО: Передаем user_states в функции, которые его требуют
-    applicant_flow.register_applicant_handlers(bot, user_states)
-    council_flow.register_council_handlers(bot) # <-- Имя функции исправлено для ясности
+    applicant_flow.register_applicant_handlers(bot)
+    council_flow.register_council_handlers(bot)
     textcrafter_flow.register_textcrafter_handlers(bot, user_states)
     admin_flow.register_admin_handlers(bot)
