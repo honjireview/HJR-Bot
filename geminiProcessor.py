@@ -26,8 +26,8 @@ def _read_file(filename: str, error_message: str) -> str:
         print(f"[ОШИБКА] Файл {filename} не найден.")
         return error_message
 
-# ИСПРАВЛЕНО: Функция теперь принимает готовый словарь с данными дела
-def get_verdict_from_gemini(appeal: dict, commit_hash: str, log_id: int):
+# ИСПРАВЛЕНО: Функция теперь принимает и bot_version
+def get_verdict_from_gemini(appeal: dict, commit_hash: str, bot_version: str, log_id: int):
     """
     Формирует детальный промпт и получает вердикт от Gemini на основе переданных данных.
     """
@@ -41,7 +41,6 @@ def get_verdict_from_gemini(appeal: dict, commit_hash: str, log_id: int):
     applicant_info = appeal.get('applicant_info', {}) or {}
     applicant_name = f"{applicant_info.get('first_name', 'Имя не указано')} (@{applicant_info.get('username', 'скрыто')})"
 
-    # ИСПРАВЛЕНО: Добавлена проверка на случай, если дата отсутствует
     created_at_dt = appeal.get('created_at')
     date_submitted = created_at_dt.strftime('%Y-%m-%d %H:%M UTC') if isinstance(created_at_dt, datetime) else "Неизвестно"
 
@@ -67,7 +66,11 @@ def get_verdict_from_gemini(appeal: dict, commit_hash: str, log_id: int):
     else:
         council_full_text = "Совет не предоставил контраргументов в установленный срок."
 
+    # Модифицируем instructions, чтобы передать туда и версию релиза
     final_instructions = instructions.format(case_id=case_id, commit_hash=commit_hash, log_id=log_id)
+    # Добавим в конец для информации
+    final_instructions += f"\nВерсия релиза: {bot_version}"
+
 
     prompt = f"""
 {final_instructions}
@@ -99,8 +102,8 @@ def get_verdict_from_gemini(appeal: dict, commit_hash: str, log_id: int):
         print(f"[ОШИБКА] Gemini API: {e}")
         return f"Ошибка при обращении к ИИ-арбитру. Детали: {e}"
 
-# ИСПРАВЛЕНО: Функция теперь принимает готовый словарь с данными дела
-def finalize_appeal(appeal_data: dict, bot, commit_hash: str):
+# ИСПРАВЛЕНО: Функция теперь принимает и bot_version
+def finalize_appeal(appeal_data: dict, bot, commit_hash: str, bot_version: str):
     """
     Получает вердикт от ИИ, формирует ПОЛНЫЙ пост и закрывает дело.
     """
@@ -111,13 +114,18 @@ def finalize_appeal(appeal_data: dict, bot, commit_hash: str):
     case_id = appeal_data['case_id']
     print(f"[FINALIZE] Начинаю финальное рассмотрение дела #{case_id}")
 
+    applicant_arguments = appeal_data.get('applicant_arguments', '').strip()
+    if not applicant_arguments or applicant_arguments.lower() == 'тест':
+        print(f"[FINALIZE_SKIP] Дело #{case_id} пропущено из-за отсутствия осмысленных аргументов. Автоматически закрываю.")
+        appealManager.update_appeal(case_id, "status", "closed_invalid")
+        appealManager.log_interaction("SYSTEM", "appeal_closed_invalid", case_id, "No valid arguments provided.")
+        return
+
     log_id = appealManager.log_interaction("SYSTEM", "finalize_start", case_id)
 
-    # ИСПРАВЛЕНО: Передаем уже имеющиеся данные, а не запрашиваем снова
-    ai_verdict_text = get_verdict_from_gemini(appeal_data, commit_hash, log_id)
+    ai_verdict_text = get_verdict_from_gemini(appeal_data, commit_hash, bot_version, log_id)
     appealManager.update_appeal(case_id, "ai_verdict", ai_verdict_text)
 
-    # ИСПРАВЛЕНО: Добавлена проверка на случай, если дата отсутствует
     created_at_dt = appeal_data.get('created_at')
     date_submitted = created_at_dt.strftime('%Y-%m-%d %H:%M UTC') if isinstance(created_at_dt, datetime) else "Неизвестно"
 
@@ -142,11 +150,16 @@ def finalize_appeal(appeal_data: dict, bot, commit_hash: str):
     else:
         council_position = "_Совет не предоставил контраргументов._"
 
+    # ИСПРАВЛЕНО: Финальный пост теперь включает и версию релиза
     final_message = (
         f"⚖️ *Итоги рассмотрения апелляции №{case_id}*\n\n"
         f"**Дата подачи:** {date_submitted}\n"
-        f"**Версия бота (коммит):** `{commit_hash}`\n"
+        f"**Версия релиза:** `{bot_version}`\n"
+        f"**Версия коммита:** `{commit_hash}`\n"
         f"**ID Вердикта:** `{log_id}`\n\n"
+        f"--- \n\n"
+        f"📌 **Предмет спора:**\n"
+        f"```\n{appeal_data.get('decision_text', 'не указано')}\n```\n\n"
         f"--- \n\n"
         f"📄 **Позиция Заявителя:**\n"
         f"{applicant_position}\n\n"

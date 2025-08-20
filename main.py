@@ -9,15 +9,17 @@ from flask import Flask, request, abort
 import telebot
 from datetime import datetime
 
-# --- ГЛОБАЛЬНАЯ ПЕРЕМЕННАЯ ДЛЯ ХЭША КОММИТА ---
-COMMIT_HASH = "N/A"
-try:
-    # Проверяем, что мы находимся в git-репозитории
-    subprocess.check_output(['git', 'rev-parse', '--is-inside-work-tree'], stderr=subprocess.STDOUT)
-    COMMIT_HASH = subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD']).decode('ascii').strip()
-    print(f"[INFO] Git-коммит успешно определен: {COMMIT_HASH}")
-except (subprocess.CalledProcessError, FileNotFoundError):
-    print(f"[WARN] Не удалось получить Git-коммит. Установлено значение по умолчанию: {COMMIT_HASH}")
+# --- ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ---
+
+# ИСПРАВЛЕНО: Читаем системную переменную Railway для хеша коммита
+# [:7] берет первые 7 символов, чтобы хеш был коротким и читаемым
+COMMIT_HASH = os.getenv("RAILWAY_GIT_COMMIT_SHA", "N/A")[:7]
+print(f"[INFO] Версия коммита определена как: {COMMIT_HASH}")
+
+# ИСПРАВЛЕНО: Читаем переменную для версии релиза, которую вы создадите в Railway
+# Если переменной нет, будет указано, что это dev-версия
+BOT_VERSION = os.getenv("BOT_RELEASE_VERSION", "dev-build")
+print(f"[INFO] Версия релиза определена как: {BOT_VERSION}")
 
 
 # Настройка логирования
@@ -90,28 +92,25 @@ def startup_and_timer_tasks():
         try:
             appeals_in_collection = appealManager.get_appeals_in_collection()
             for appeal_data in appeals_in_collection:
-                # Пропускаем, если данные по какой-то причине некорректны
                 if not appeal_data or 'case_id' not in appeal_data:
                     continue
 
                 case_id = appeal_data['case_id']
 
-                # Логика досрочного завершения
                 expected_responses = appeal_data.get('expected_responses')
                 if expected_responses is not None:
                     council_answers = appeal_data.get('council_answers') or []
                     if len(council_answers) >= expected_responses:
                         log.info(f"Досрочное завершение для дела #{case_id}: получено {len(council_answers)}/{expected_responses} ответов.")
-                        # ИСПРАВЛЕНО: Передаем уже полученные данные, а не ID
-                        finalize_appeal(appeal_data, bot, COMMIT_HASH)
+                        # ИСПРАВЛЕНО: Передаем обе переменные: коммит и версию релиза
+                        finalize_appeal(appeal_data, bot, COMMIT_HASH, BOT_VERSION)
                         continue
 
-                # Логика завершения по истечении 24 часов
                 expires_at = appeal_data.get('timer_expires_at')
                 if expires_at and datetime.now(expires_at.tzinfo) > expires_at:
                     log.info(f"Найден просроченный таймер для дела #{case_id}. Запускаю финальное рассмотрение.")
-                    # ИСПРАВЛЕНО: Передаем уже полученные данные, а не ID
-                    finalize_appeal(appeal_data, bot, COMMIT_HASH)
+                    # ИСПРАВЛЕНО: Передаем обе переменные: коммит и версию релиза
+                    finalize_appeal(appeal_data, bot, COMMIT_HASH, BOT_VERSION)
 
         except Exception as e:
             log.error(f"Критическая ошибка в фоновой задаче проверки таймеров: {e}")
