@@ -5,13 +5,14 @@ import json
 import psycopg
 import logging
 from datetime import datetime
+from difflib import SequenceMatcher # Используем для сравнения текстов
 
 import connectionChecker
 
 log = logging.getLogger("hjr-bot.appeal_manager")
 
-# ИСПРАВЛЕНО: Новая функция для проверки осмысленности аргументов
 def are_arguments_meaningful(text: str, min_length: int = 20) -> bool:
+    # ... (код без изменений) ...
     """Проверяет, что текст не пустой, не 'тест' и имеет минимальную длину."""
     if not text:
         return False
@@ -22,7 +23,28 @@ def are_arguments_meaningful(text: str, min_length: int = 20) -> bool:
         return False
     return True
 
+# ИСПРАВЛЕНО: Новая функция для поиска похожих апелляций
+def find_similar_appeal(decision_text: str, similarity_threshold=0.9):
+    """Ищет в базе апелляции с похожим предметом спора."""
+    try:
+        conn = _get_conn()
+        with conn.cursor() as cur:
+            cur.execute("SELECT case_id, decision_text FROM appeals WHERE status = 'closed'")
+            records = cur.fetchall()
+
+            for record in records:
+                case_id, db_text = record
+                # Простое сравнение на схожесть, чтобы найти дубликаты или прецеденты
+                similarity = SequenceMatcher(None, decision_text, db_text).ratio()
+                if similarity >= similarity_threshold:
+                    return {"case_id": case_id, "similarity": similarity}
+    except Exception as e:
+        log.error(f"[ОШИБКА] Не удалось найти похожие апелляции: {e}")
+    return None
+
+
 def _get_conn():
+    # ... (остальной код файла без изменений) ...
     conn = connectionChecker.db_conn
     if conn is None or conn.closed:
         if connectionChecker.check_db_connection():
@@ -31,24 +53,24 @@ def _get_conn():
             raise RuntimeError("Не удалось восстановить соединение с БД.")
     return conn
 
-# ... (остальной код файла без изменений) ...
 def create_appeal(case_id, initial_data):
     try:
         conn = _get_conn()
         with conn.cursor() as cur:
             applicant_info_json = json.dumps(initial_data.get('applicant_info', {}))
+            # Добавляем thread_id в базу
             cur.execute(
                 """
-                INSERT INTO appeals (case_id, applicant_chat_id, decision_text, status, created_at, applicant_info, total_voters)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO appeals (case_id, applicant_chat_id, decision_text, status, created_at, applicant_info, total_voters, message_thread_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (case_id) DO UPDATE SET
                     applicant_chat_id = EXCLUDED.applicant_chat_id, decision_text = EXCLUDED.decision_text,
                                                  status = EXCLUDED.status, created_at = EXCLUDED.created_at,
-                                                 applicant_info = EXCLUDED.applicant_info;
+                                                 applicant_info = EXCLUDED.applicant_info, message_thread_id = EXCLUDED.message_thread_id;
                 """,
                 (case_id, initial_data.get('applicant_chat_id'), initial_data.get('decision_text'),
                  initial_data.get('status'), initial_data.get('created_at'),
-                 applicant_info_json, initial_data.get('total_voters'))
+                 applicant_info_json, initial_data.get('total_voters'), initial_data.get('message_thread_id'))
             )
         conn.commit()
     except Exception as e:
@@ -73,10 +95,15 @@ def update_appeal(case_id, key, value):
         with conn.cursor() as cur:
             if isinstance(value, (dict, list)):
                 value = json.dumps(value)
-            query = psycopg.sql.SQL("UPDATE appeals SET {key} = %s WHERE case_id = %s").format(
-                key=psycopg.sql.Identifier(key)
-            )
-            cur.execute(query, (value, case_id))
+            # Добавляем новую колонку discussion_context
+            if key == 'discussion_context':
+                query = psycopg.sql.SQL("UPDATE appeals SET discussion_context = %s WHERE case_id = %s")
+                cur.execute(query, (value, case_id))
+            else:
+                query = psycopg.sql.SQL("UPDATE appeals SET {key} = %s WHERE case_id = %s").format(
+                    key=psycopg.sql.Identifier(key)
+                )
+                cur.execute(query, (value, case_id))
         conn.commit()
     except Exception as e:
         log.error(f"[ОШИБКА] Не удалось обновить дело #{case_id} (поле {key}): {e}")

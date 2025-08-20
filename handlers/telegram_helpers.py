@@ -11,6 +11,7 @@ from .council_helpers import is_link_from_council, resolve_council_id
 log = logging.getLogger("hjr-bot.telegram_helpers")
 
 def get_chat_safe(bot, chat_id: Union[int, str]):
+    # ... (код без изменений) ...
     try:
         return bot.get_chat(chat_id)
     except Exception as e:
@@ -18,6 +19,7 @@ def get_chat_safe(bot, chat_id: Union[int, str]):
         return None
 
 def _extract_message_content(message) -> Dict[str, Any]:
+    # ... (код без изменений) ...
     if not message:
         return {}
     content = {}
@@ -47,41 +49,48 @@ def _extract_message_content(message) -> Dict[str, Any]:
 def get_message_content_robust(bot, dest_chat_id: int, from_chat_id: Union[int, str], message_id: int) -> Optional[Dict[str, Any]]:
     """
     Надежный способ получить содержимое сообщения, пробуя разные методы.
-    1. Пытается forward_message.
-    2. Если не удалось, пытается copy_message.
-    В любом случае удаляет временное сообщение.
+    Возвращает словарь с контентом и ID топика, если он есть.
     """
     temp_message = None
     content = None
 
-    # --- Попытка №1: forward_message ---
     try:
         log.info(f"[ROBUST_GET] Attempting to FORWARD message {message_id} from {from_chat_id} to {dest_chat_id}")
         temp_message = bot.forward_message(chat_id=dest_chat_id, from_chat_id=from_chat_id, message_id=message_id)
         content = _extract_message_content(temp_message)
-        log.info(f"[ROBUST_GET] FORWARD successful. Content type: {content.get('type')}")
+
+        # ИСПРАВЛЕНО: Извлекаем ID топика
+        if content:
+            content['thread_id'] = getattr(temp_message.reply_to_message, 'message_thread_id', None) or getattr(temp_message, 'message_thread_id', None)
+            if temp_message.is_topic_message:
+                content['thread_id'] = temp_message.message_thread_id
+
+        log.info(f"[ROBUST_GET] FORWARD successful. Content type: {content.get('type')}, Thread ID: {content.get('thread_id')}")
         return content
     except Exception as e:
         log.warning(f"[ROBUST_GET] FORWARD failed: {e}. Falling back to COPY.")
-        # Удаляем временное сообщение, если оно было создано, но извлечение контента провалилось
         if temp_message:
-            try:
-                bot.delete_message(chat_id=dest_chat_id, message_id=temp_message.message_id)
+            try: bot.delete_message(chat_id=dest_chat_id, message_id=temp_message.message_id)
             except Exception: pass
             temp_message = None
 
-    # --- Попытка №2: copy_message ---
     try:
         log.info(f"[ROBUST_GET] Attempting to COPY message {message_id} from {from_chat_id} to {dest_chat_id}")
         temp_message = bot.copy_message(chat_id=dest_chat_id, from_chat_id=from_chat_id, message_id=message_id)
         content = _extract_message_content(temp_message)
-        log.info(f"[ROBUST_GET] COPY successful. Content type: {content.get('type')}")
+
+        # ИСПРАВЛЕНО: Извлекаем ID топика
+        if content:
+            content['thread_id'] = getattr(temp_message.reply_to_message, 'message_thread_id', None) or getattr(temp_message, 'message_thread_id', None)
+            if temp_message.is_topic_message:
+                content['thread_id'] = temp_message.message_thread_id
+
+        log.info(f"[ROBUST_GET] COPY successful. Content type: {content.get('type')}, Thread ID: {content.get('thread_id')}")
         return content
     except Exception as e:
         log.error(f"[ROBUST_GET] CRITICAL: Both FORWARD and COPY failed. Last error (COPY): {e}")
         return None
     finally:
-        # Гарантированно удаляем временное сообщение
         if temp_message:
             try:
                 bot.delete_message(chat_id=dest_chat_id, message_id=temp_message.message_id)
@@ -91,6 +100,7 @@ def get_message_content_robust(bot, dest_chat_id: int, from_chat_id: Union[int, 
 
 
 def validate_appeal_link(bot, url: str, user_chat_id: int) -> (bool, Union[str, Dict]):
+    # ... (код до Шага 4 без изменений) ...
     """
     Комплексная проверка ссылки для апелляции с исчерпывающим логированием.
     Возвращает (успех, данные/ошибка).
@@ -129,20 +139,50 @@ def validate_appeal_link(bot, url: str, user_chat_id: int) -> (bool, Union[str, 
         return False, "Не удалось проверить права доступа к каналу. Убедитесь, что бот является полноценным участником этого канала."
     log.info("[VALIDATOR] OK Step 3: Diagnostic checks passed.")
 
-    # Шаг 4: Получение содержимого новым надежным методом
+    # Шаг 4: Получение содержимого
     log.info(f"[VALIDATOR] OK Step 4: Attempting to get content using robust method.")
     content = get_message_content_robust(bot, dest_chat_id=user_chat_id, from_chat_id=from_chat, message_id=msg_id)
     if not content:
-        log.error("[VALIDATOR] FAILED Step 4: Robust content retrieval failed. Both forward and copy methods were unsuccessful.")
-        return False, "Не удалось получить содержимое сообщения. Возможные причины: защита от пересылки у автора оригинального сообщения или защита от копирования в канале. Проверьте логи сервера для деталей."
+        log.error("[VALIDATOR] FAILED Step 4: Robust content retrieval failed.")
+        return False, "Не удалось получить содержимое сообщения. Проверьте права бота или защиту от копирования в канале."
 
-    log.info(f"[VALIDATOR] OK Step 4: Content extracted successfully. Type: {content.get('type')}")
+    # Добавляем ID чата и сообщения для дальнейшего использования
+    content['from_chat'] = from_chat
+    content['msg_id'] = msg_id
+
+    log.info(f"[VALIDATOR] OK Step 4: Content extracted. Type: {content.get('type')}, Thread ID: {content.get('thread_id')}")
 
     # Шаг 5: Проверка на медиа
     if content.get("type") == "media":
         log.warning("[VALIDATOR] FAILED Step 5: Post contains media.")
-        return False, "Ссылки на медиафайлы (фото, видео и т.д.) не принимаются. Пожалуйста, укажите ссылку на текстовый пост или опрос."
+        return False, "Ссылки на медиафайлы не принимаются. Пожалуйста, укажите ссылку на текстовый пост или опрос."
     log.info("[VALIDATOR] OK Step 5: Content type is valid (text or poll).")
 
     log.info(f"--- [VALIDATION SUCCESS] URL: {url} ---")
     return True, content
+
+# ИСПРАВЛЕНО: Новая функция для получения контекста
+def get_discussion_context(bot, chat_id, message_id, thread_id=None, limit=3):
+    """Пытается получить несколько сообщений до указанного для контекста."""
+    context = []
+    # Telegram API не предоставляет прямого способа получить сообщения "до",
+    # поэтому мы используем get_chat_history и фильтруем.
+    # Это не всегда надежно, но лучше, чем ничего.
+    try:
+        # Получаем чуть больше сообщений, чтобы отфильтровать нужное и те, что до него
+        history = bot.get_chat_history(chat_id, limit=limit + 5, message_id=message_id)
+
+        # Фильтруем сообщения из нужного топика, если он есть
+        if thread_id:
+            history = [m for m in history if m.message_thread_id == thread_id]
+
+        for msg in reversed(history): # Идем от старых к новым
+            if msg.message_id < message_id:
+                author_name = getattr(msg.from_user, 'first_name', 'Неизвестно')
+                text = getattr(msg, 'text', None) or getattr(msg, 'caption', '(медиа)')
+                context.append(f"{author_name}: {text}")
+
+        return "\n".join(context[-limit:]) # Берем последние limit сообщений
+    except Exception as e:
+        log.warning(f"Не удалось получить контекст обсуждения для {chat_id}/{message_id}: {e}")
+        return "Не удалось получить контекст обсуждения."

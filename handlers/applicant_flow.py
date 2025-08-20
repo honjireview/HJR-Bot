@@ -5,13 +5,14 @@ from datetime import datetime
 from telebot import types
 
 import appealManager
-from .telegram_helpers import validate_appeal_link
+from .telegram_helpers import validate_appeal_link, get_discussion_context
 from .council_helpers import request_counter_arguments, resolve_council_id
 
 log = logging.getLogger("hjr-bot.applicant_flow")
 CHARACTER_LIMIT = 4000
 
 class AppealStates:
+    # ... (класс без изменений) ...
     WAITING_FOR_LINK = "waiting_for_link"
     WAITING_VOTE_CONFIRM = "waiting_vote_confirm"
     WAITING_MAIN_ARGUMENT = "waiting_main_argument"
@@ -20,7 +21,7 @@ class AppealStates:
     WAITING_Q3 = "waiting_q3"
 
 def _render_item_text(item: dict) -> str:
-    # ... (код без изменений) ...
+    # ... (функция без изменений) ...
     if not item: return ""
     if item.get("type") == "poll":
         p = item.get("poll", {})
@@ -35,12 +36,12 @@ def _render_item_text(item: dict) -> str:
     return "(Не удалось отобразить содержимое)"
 
 def register_applicant_handlers(bot):
+    # ... (код до handle_fsm_messages без изменений) ...
     """
     Регистрирует все обработчики для процесса ПОДАЧИ апелляции.
     """
     @bot.message_handler(commands=["start"], chat_types=['private'])
     def send_welcome(message):
-        # ... (код без изменений) ...
         user_id = message.from_user.id
         is_editor = appealManager.is_user_an_editor(bot, user_id, resolve_council_id())
 
@@ -60,7 +61,6 @@ def register_applicant_handlers(bot):
 
     @bot.callback_query_handler(func=lambda call: call.data == "start_appeal")
     def handle_start_appeal_callback(call):
-        # ... (код без изменений) ...
         user_id = call.from_user.id
         is_editor = appealManager.is_user_an_editor(bot, user_id, resolve_council_id())
 
@@ -104,22 +104,37 @@ def register_applicant_handlers(bot):
             return
 
         if state == AppealStates.WAITING_FOR_LINK:
-            # ... (код без изменений) ...
             is_valid, result = validate_appeal_link(bot, message.text, user_chat_id=message.chat.id)
             if not is_valid:
                 bot.reply_to(message, f"Ошибка: {result}")
                 return
+
             content_data = result
+            decision_text = _render_item_text(content_data)
+
+            # ИСПРАВЛЕНО: Проверка на дубликаты
+            similar_case = appealManager.find_similar_appeal(decision_text)
+            if similar_case and similar_case['similarity'] > 0.98: # >98% - это почти точная копия
+                bot.reply_to(message, f"Похоже, апелляция по этому решению уже была рассмотрена (дело №{similar_case['case_id']}). Подача дубликата отменена.")
+                appealManager.delete_user_state(user_id)
+                return
+
             new_case_id = random.randint(10000, 99999)
             data["case_id"] = new_case_id
 
             applicant_info = { "id": user_id, "first_name": message.from_user.first_name, "username": message.from_user.username }
             initial_appeal_data = {
                 "applicant_chat_id": message.chat.id, "applicant_info": applicant_info,
-                "created_at": datetime.utcnow(), "decision_text": _render_item_text(content_data),
+                "created_at": datetime.utcnow(), "decision_text": decision_text,
                 "total_voters": content_data.get("poll", {}).get("total_voter_count"), "status": "collecting",
+                "message_thread_id": content_data.get("thread_id") # Сохраняем ID топика
             }
             appealManager.create_appeal(new_case_id, initial_appeal_data)
+
+            # Получаем контекст обсуждения
+            discussion_context = get_discussion_context(bot, content_data['from_chat'], content_data['msg_id'], thread_id=content_data.get("thread_id"))
+            appealManager.update_appeal(new_case_id, 'discussion_context', discussion_context)
+
             bot.send_message(message.chat.id, f"Ссылка принята. Вашему делу присвоен номер #{new_case_id}.")
 
             if content_data.get("type") == "poll":
@@ -131,6 +146,7 @@ def register_applicant_handlers(bot):
                 appealManager.set_user_state(user_id, AppealStates.WAITING_MAIN_ARGUMENT, data)
                 bot.send_message(message.chat.id, "Теперь, пожалуйста, изложите ваши основные аргументы.")
 
+        # ... (остальной код handle_fsm_messages и другие функции без изменений) ...
         elif state == AppealStates.WAITING_MAIN_ARGUMENT:
             appealManager.update_appeal(data["case_id"], "applicant_arguments", message.text)
             appealManager.set_user_state(user_id, AppealStates.WAITING_Q1, data)
@@ -149,14 +165,12 @@ def register_applicant_handlers(bot):
         elif state == AppealStates.WAITING_Q3:
             _update_appeal_answer(data["case_id"], "q3", message.text)
 
-            # ИСПРАВЛЕНО: Проверяем аргументы заявителя ПЕРЕД отправкой дела совету
             case_id = data["case_id"]
             appeal = appealManager.get_appeal(case_id)
             main_args = appeal.get("applicant_arguments", "")
 
             if not appealManager.are_arguments_meaningful(main_args):
                 bot.send_message(message.chat.id, "Ваши основные аргументы кажутся слишком короткими или несодержательными. Пожалуйста, изложите вашу позицию более подробно, чтобы Совет мог ее рассмотреть.")
-                # Возвращаем пользователя на шаг ввода основных аргументов
                 appealManager.set_user_state(user_id, AppealStates.WAITING_MAIN_ARGUMENT, data)
                 return
 
@@ -166,7 +180,6 @@ def register_applicant_handlers(bot):
 
     @bot.callback_query_handler(func=lambda call: call.data.startswith("vote_"))
     def handle_vote_confirm_callback(call):
-        # ... (код без изменений) ...
         user_id = call.from_user.id
         state_data = appealManager.get_user_state(user_id)
         if not (state_data and state_data.get("state") == AppealStates.WAITING_VOTE_CONFIRM):
@@ -187,9 +200,18 @@ def register_applicant_handlers(bot):
 
         if action == "vote_yes":
             total_voters = appeal.get("total_voters")
+
+            if total_voters == 1:
+                bot.send_message(call.message.chat.id, "Вы не можете подать апелляцию на решение, в котором вы были единственным голосовавшим. Процесс отменен.")
+                appealManager.delete_appeal(case_id)
+                appealManager.delete_user_state(user_id)
+                bot.answer_callback_query(call.id)
+                return
+
             expected_responses = total_voters - 1 if total_voters is not None and total_voters > 0 else 0
             appealManager.update_appeal(case_id, "expected_responses", expected_responses)
             bot.send_message(call.message.chat.id, "Понятно. Ваш голос будет вычтен из общего числа для обеспечения объективности при сборе контраргументов.")
+
         elif action == "vote_no":
             appealManager.update_appeal(case_id, "expected_responses", appeal.get("total_voters", 0))
             bot.send_message(call.message.chat.id, "Понятно. Информация принята.")
@@ -199,7 +221,6 @@ def register_applicant_handlers(bot):
         bot.answer_callback_query(call.id)
 
 def _update_appeal_answer(case_id, key, value):
-    # ... (код без изменений) ...
     appeal = appealManager.get_appeal(case_id)
     if appeal:
         current_answers = appeal.get("applicant_answers", {}) or {}

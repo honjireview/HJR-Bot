@@ -12,10 +12,10 @@ import appealManager
 
 log = logging.getLogger("hjr-bot.council_helpers")
 
+# ... (код до request_counter_arguments без изменений) ...
 _RESOLVED = {"value": None}
 
 def resolve_council_id() -> Optional[Union[int, str]]:
-    # ... (код без изменений) ...
     """
     Резолвит EDITORS_GROUP_ID из окружения в int (например -100...) или в username '@...'.
     Кеширует результат.
@@ -42,9 +42,7 @@ def resolve_council_id() -> Optional[Union[int, str]]:
     log.error(f"[council_helpers] cannot resolve EDITORS_GROUP_ID: '{raw}'")
     return None
 
-
 def is_link_from_council(bot, parsed_from_chat_id: Union[int, str]) -> bool:
-    # ... (код без изменений) ...
     """
     Проверяет, что parsed_from_chat_id соответствует EDITORS_GROUP_ID.
     """
@@ -71,12 +69,14 @@ def is_link_from_council(bot, parsed_from_chat_id: Union[int, str]) -> bool:
 def request_counter_arguments(bot, case_id: int):
     """
     Формирует и отправляет ПОЛНЫЙ запрос контраргументов по делу case_id в канал/чат Совета.
+    Отправляет в нужный топик, если он есть.
     """
     appeal = appealManager.get_appeal(case_id)
     if not appeal:
         log.warning(f"[council_helpers] appeal #{case_id} not found for request_counter_arguments")
         return
 
+    # ... (код формирования request_text без изменений) ...
     decision_text = appeal.get("decision_text") or "(Содержимое оспариваемого решения отсутствует)"
     applicant_args = appeal.get("applicant_arguments") or "(Аргументы заявителя не указаны)"
     answers = appeal.get("applicant_answers") or {}
@@ -85,12 +85,11 @@ def request_counter_arguments(bot, case_id: int):
     q3 = answers.get("q3", "(нет ответа)")
     bot_username = bot.get_me().username
 
-    # ИСПРАВЛЕНО: Добавлено предупреждение для Совета
     request_text = (
         f"📣 *Запрос контраргументов по апелляции №{case_id}* 📣\n\n"
         f"Оспаривается следующее решение:\n"
         f"```\n{decision_text}\n```\n\n"
-        f"*Аргументы заявителя:*\n"
+        f"*Аргументы заявителя (анонимно):*\n"
         f"{applicant_args}\n\n"
         f"*Уточняющие ответы заявителя:*\n"
         f"1. *Нарушенный пункт устава:* {q1}\n"
@@ -109,9 +108,12 @@ def request_counter_arguments(bot, case_id: int):
         log.error(f"[council_helpers] EDITORS_GROUP_ID not set — cannot send request for case #{case_id}")
         return
 
+    # ИСПРАВЛЕНО: Отправляем в нужный топик
+    thread_id = appeal.get("message_thread_id")
+
     try:
-        bot.send_message(target, request_text, parse_mode="Markdown")
-        log.info(f"[council_helpers] sent counter-argument request for case #{case_id} to {target}")
+        bot.send_message(target, request_text, parse_mode="Markdown", message_thread_id=thread_id)
+        log.info(f"[council_helpers] sent counter-argument request for case #{case_id} to {target}, thread: {thread_id}")
     except Exception as e:
         log.exception(f"[council_helpers] failed to send request for case #{case_id} to {target}: {e}")
         return

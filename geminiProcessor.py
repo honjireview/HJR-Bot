@@ -3,8 +3,9 @@ import os
 import google.generativeai as genai
 import appealManager
 from datetime import datetime
+from precedents import PRECEDENTS # Импортируем прецеденты
 
-GEMINI_MODEL_NAME = "models/gemini-1.5-flash-latest"
+GEMINI_MODEL_NAME = "models/gemini-1.5-pro-latest"
 
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 gemini_model = None
@@ -19,6 +20,7 @@ else:
     print("[КРИТИЧЕСКАЯ ОШИБКА] Не найден GEMINI_API_KEY.")
 
 def _read_file(filename: str, error_message: str) -> str:
+    # ... (функция без изменений) ...
     try:
         with open(filename, 'r', encoding='utf-8') as f:
             return f.read()
@@ -26,10 +28,9 @@ def _read_file(filename: str, error_message: str) -> str:
         print(f"[ОШИБКА] Файл {filename} не найден.")
         return error_message
 
-# ИСПРАВЛЕНО: Функция теперь принимает и bot_version
 def get_verdict_from_gemini(appeal: dict, commit_hash: str, bot_version: str, log_id: int):
     """
-    Формирует детальный промпт и получает вердикт от Gemini на основе переданных данных.
+    Формирует промпт с прецедентами и контекстом, и получает вердикт от Gemini.
     """
     if not appeal:
         return "Ошибка: Не удалось найти данные по делу."
@@ -37,9 +38,6 @@ def get_verdict_from_gemini(appeal: dict, commit_hash: str, bot_version: str, lo
     case_id = appeal.get('case_id')
     project_rules = _read_file('rules.txt', "Устав проекта не найден.")
     instructions = _read_file('instructions.txt', "Инструкции для ИИ не найдены.")
-
-    applicant_info = appeal.get('applicant_info', {}) or {}
-    applicant_name = f"{applicant_info.get('first_name', 'Имя не указано')} (@{applicant_info.get('username', 'скрыто')})"
 
     created_at_dt = appeal.get('created_at')
     date_submitted = created_at_dt.strftime('%Y-%m-%d %H:%M UTC') if isinstance(created_at_dt, datetime) else "Неизвестно"
@@ -66,26 +64,48 @@ def get_verdict_from_gemini(appeal: dict, commit_hash: str, bot_version: str, lo
     else:
         council_full_text = "Совет не предоставил контраргументов в установленный срок."
 
-    # Модифицируем instructions, чтобы передать туда и версию релиза
+    # ИСПРАВЛЕНО: Формируем блок с прецедентами
+    precedents_text = ""
+    similar_case = appealManager.find_similar_appeal(appeal.get('decision_text', ''), similarity_threshold=0.8)
+    if similar_case:
+        similar_case_data = appealManager.get_appeal(similar_case['case_id'])
+        if similar_case_data:
+            precedents_text = f"""
+**К сведению: Прецедентное дело №{similar_case_data['case_id']}**
+- **Предмет спора:** {similar_case_data.get('decision_text', 'не указано')}
+- **Вердикт:** {similar_case_data.get('ai_verdict', 'не указано')}
+"""
+    # Добавляем прецеденты из файла
+    if PRECEDENTS:
+        precedents_text += "\n\n**К сведению: Архивные прецеденты**\n"
+        for p in PRECEDENTS:
+            precedents_text += f"- Дело №{p['case_id']}: {p['summary']} Вердикт: {p['decision_summary']}\n"
+
+
     final_instructions = instructions.format(case_id=case_id, commit_hash=commit_hash, log_id=log_id)
-    # Добавим в конец для информации
     final_instructions += f"\nВерсия релиза: {bot_version}"
+    # ИСПРАВЛЕНО: Добавляем инструкцию по терминологии
+    final_instructions += "\nОСОБОЕ ВНИМАНИЕ: При анализе строго придерживайтесь определений из раздела 'ТЕРМИНОЛОГИЯ' в уставе."
 
 
     prompt = f"""
 {final_instructions}
+{precedents_text}
 **Устав проекта для анализа:**
 <rules>
 {project_rules}
 </rules>
 **ДЕТАЛИ ДЕЛА №{case_id}**
 1.  **Дата подачи:** {date_submitted}
-2.  **Заявитель:** {applicant_name}
+2.  **Контекст обсуждения (сообщения до оспариваемого решения):**
+    ```
+    {appeal.get('discussion_context', 'не доступен')}
+    ```
 3.  **Предмет спора (оспариваемое решение):**
     ```
     {appeal.get('decision_text', 'не указано')}
     ```
-4.  **Позиция Заявителя:**
+4.  **Позиция Заявителя (анонимно):**
     {applicant_full_text}
 5.  **Позиция Совета Редакторов:**
     {council_full_text}
@@ -102,20 +122,20 @@ def get_verdict_from_gemini(appeal: dict, commit_hash: str, bot_version: str, lo
         print(f"[ОШИБКА] Gemini API: {e}")
         return f"Ошибка при обращении к ИИ-арбитру. Детали: {e}"
 
-# ИСПРАВЛЕНО: Функция теперь принимает и bot_version
 def finalize_appeal(appeal_data: dict, bot, commit_hash: str, bot_version: str):
+    # ... (остальной код функции без изменений) ...
     """
     Получает вердикт от ИИ, формирует ПОЛНЫЙ пост и закрывает дело.
     """
-    if not appeal_data or 'case_id' not in appeal_data:
-        print(f"[CRITICAL_ERROR] В finalize_appeal переданы некорректные данные.")
+    if not isinstance(appeal_data, dict) or 'case_id' not in appeal_data:
+        print(f"[CRITICAL_ERROR] В finalize_appeal переданы некорректные данные. Тип данных: {type(appeal_data)}")
         return
 
     case_id = appeal_data['case_id']
     print(f"[FINALIZE] Начинаю финальное рассмотрение дела #{case_id}")
 
     applicant_arguments = appeal_data.get('applicant_arguments', '').strip()
-    if not applicant_arguments or applicant_arguments.lower() == 'тест':
+    if not appealManager.are_arguments_meaningful(applicant_arguments):
         print(f"[FINALIZE_SKIP] Дело #{case_id} пропущено из-за отсутствия осмысленных аргументов. Автоматически закрываю.")
         appealManager.update_appeal(case_id, "status", "closed_invalid")
         appealManager.log_interaction("SYSTEM", "appeal_closed_invalid", case_id, "No valid arguments provided.")
@@ -150,7 +170,6 @@ def finalize_appeal(appeal_data: dict, bot, commit_hash: str, bot_version: str):
     else:
         council_position = "_Совет не предоставил контраргументов._"
 
-    # ИСПРАВЛЕНО: Финальный пост теперь включает и версию релиза
     final_message = (
         f"⚖️ *Итоги рассмотрения апелляции №{case_id}*\n\n"
         f"**Дата подачи:** {date_submitted}\n"
@@ -161,7 +180,7 @@ def finalize_appeal(appeal_data: dict, bot, commit_hash: str, bot_version: str):
         f"📌 **Предмет спора:**\n"
         f"```\n{appeal_data.get('decision_text', 'не указано')}\n```\n\n"
         f"--- \n\n"
-        f"📄 **Позиция Заявителя:**\n"
+        f"📄 **Позиция Заявителя (анонимно):**\n"
         f"{applicant_position}\n\n"
         f"--- \n\n"
         f"👥 **Позиция Совета Редакторов:**\n"
