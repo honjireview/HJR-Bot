@@ -44,8 +44,15 @@ def markdown_to_html(md_text: str) -> str:
     Простой конвертер из Markdown (используемого Telegram) в HTML (для Telegraph).
     Поддерживает **жирный**, *курсив*, ```код```.
     """
-    text = md_text.replace('**', '<b>').replace('**', '</b>') # Для жирного
-    text = text.replace('*', '<i>').replace('*', '</i>')     # Для курсива
-    text = text.replace('```\n', '<pre>').replace('\n```', '</pre>') # Для блоков кода
+    # Важно соблюдать порядок замен, чтобы не было конфликтов
+    text = md_text.replace('```\n', '<pre>').replace('\n```', '</pre>').replace('```', '<pre>')
+    text = text.replace('**', '<b>', 1).replace('**', '</b>', 1)
+    while '**' in text:
+        text = text.replace('**', '<b>', 1).replace('**', '</b>', 1)
+
+    text = text.replace('*', '<i>', 1).replace('*', '</i>', 1)
+    while '*' in text:
+        text = text.replace('*', '<i>', 1).replace('*', '</i>', 1)
+
     text = text.replace('\n', '<br>') # Переносы строк
     return text

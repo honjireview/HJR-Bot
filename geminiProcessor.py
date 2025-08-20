@@ -4,13 +4,11 @@ import google.generativeai as genai
 import appealManager
 from datetime import datetime
 from precedents import PRECEDENTS
-# ИСПРАВЛЕНО: Импортируем наш новый хелпер
 from telegraph_helpers import post_to_telegraph, markdown_to_html
 
 GEMINI_MODEL_NAME = "models/gemini-1.5-pro-latest"
 
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
-# ... (остальной код до finalize_appeal без изменений) ...
 gemini_model = None
 
 if GEMINI_API_KEY:
@@ -113,7 +111,6 @@ def get_verdict_from_gemini(appeal: dict, commit_hash: str, bot_version: str, lo
         print(f"[ОШИБКА] Gemini API: {e}")
         return f"Ошибка при обращении к ИИ-арбитру. Детали: {e}"
 
-
 def finalize_appeal(appeal_data: dict, bot, commit_hash: str, bot_version: str):
     if not isinstance(appeal_data, dict) or 'case_id' not in appeal_data:
         print(f"[CRITICAL_ERROR] В finalize_appeal переданы некорректные данные. Тип данных: {type(appeal_data)}")
@@ -179,11 +176,9 @@ def finalize_appeal(appeal_data: dict, bot, commit_hash: str, bot_version: str):
     applicant_chat_id = appeal_data.get('applicant_chat_id')
     appeals_channel_id = os.getenv('APPEALS_CHANNEL_ID')
 
-    # ИСПРАВЛЕНО: Новая логика отправки
     message_to_send = ""
     if len(final_message_markdown) > 4096:
         print(f"Сообщение по делу #{case_id} слишком длинное ({len(final_message_markdown)} симв.). Публикую в Telegraph.")
-        # Конвертируем Markdown в HTML для Telegraph
         final_message_html = markdown_to_html(final_message_markdown)
         page_url = post_to_telegraph(f"Вердикт по апелляции №{case_id}", final_message_html)
 
@@ -194,7 +189,6 @@ def finalize_appeal(appeal_data: dict, bot, commit_hash: str, bot_version: str):
                 f"Ознакомиться с полным решением можно по ссылке:\n{page_url}"
             )
         else:
-            # Если Telegraph не сработал, отправляем урезанную версию
             message_to_send = final_message_markdown[:4000] + "\n\n_[Сообщение было урезано из-за превышения лимита Telegram]_"
     else:
         message_to_send = final_message_markdown
