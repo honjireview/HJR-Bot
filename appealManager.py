@@ -10,6 +10,18 @@ import connectionChecker
 
 log = logging.getLogger("hjr-bot.appeal_manager")
 
+# ИСПРАВЛЕНО: Новая функция для проверки осмысленности аргументов
+def are_arguments_meaningful(text: str, min_length: int = 20) -> bool:
+    """Проверяет, что текст не пустой, не 'тест' и имеет минимальную длину."""
+    if not text:
+        return False
+    text = text.strip().lower()
+    if text == 'тест':
+        return False
+    if len(text) < min_length:
+        return False
+    return True
+
 def _get_conn():
     conn = connectionChecker.db_conn
     if conn is None or conn.closed:
@@ -19,7 +31,7 @@ def _get_conn():
             raise RuntimeError("Не удалось восстановить соединение с БД.")
     return conn
 
-# ... (все функции до get_expired_appeals остаются без изменений) ...
+# ... (остальной код файла без изменений) ...
 def create_appeal(case_id, initial_data):
     try:
         conn = _get_conn()
@@ -88,7 +100,6 @@ def delete_appeal(case_id):
     except Exception as e:
         log.error(f"[ОШИБКА] Не удалось удалить дело #{case_id}: {e}")
 
-# ИСПРАВЛЕНО: Функция переименована для ясности
 def get_appeals_in_collection():
     """Возвращает все апелляции, которые сейчас в стадии сбора контраргументов."""
     try:

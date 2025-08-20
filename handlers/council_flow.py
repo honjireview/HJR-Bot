@@ -19,6 +19,7 @@ def register_council_handlers(bot):
     """
     @bot.message_handler(commands=['reply'], chat_types=['private'])
     def handle_reply(message):
+        # ... (код без изменений) ...
         user_id = message.from_user.id
         is_editor = appealManager.is_user_an_editor(bot, user_id, resolve_council_id())
         if not is_editor:
@@ -39,7 +40,6 @@ def register_council_handlers(bot):
             bot.reply_to(message, f"Сбор контраргументов по делу #{case_id} уже завершен.")
             return
 
-        # Инициализируем пустое состояние для ответов
         data = {"case_id": case_id, "answers": {}}
         appealManager.set_user_state(user_id, CouncilStates["MAIN_ARG"], data)
         log.info(f"[COUNCIL_FLOW] User {user_id} starts reply for case #{case_id}. State set to {CouncilStates['MAIN_ARG']}.")
@@ -56,7 +56,6 @@ def register_council_handlers(bot):
     def handle_council_fsm(message):
         user_id = message.from_user.id
 
-        # ИСПРАВЛЕНО: Блокировка команд во время диалога
         if message.text.startswith('/'):
             if message.text.strip() != '/cancel':
                 bot.reply_to(message, "Пожалуйста, завершите процесс ответа или отмените его командой /cancel.")
@@ -73,7 +72,6 @@ def register_council_handlers(bot):
             bot.reply_to(message, f"Вы превысили лимит символов ({CHARACTER_LIMIT}).")
             return
 
-        # Гарантируем, что у нас есть словарь для ответов
         current_answers = data.get("answers", {})
 
         if state == CouncilStates["MAIN_ARG"]:
@@ -94,6 +92,15 @@ def register_council_handlers(bot):
 
         elif state == CouncilStates["Q2"]:
             current_answers["q2"] = message.text
+
+            # ИСПРАВЛЕНО: Проверяем контраргументы перед сохранением
+            main_args = current_answers.get("main_arg", "")
+            if not appealManager.are_arguments_meaningful(main_args):
+                bot.send_message(message.chat.id, "Ваши основные контраргументы кажутся слишком короткими или несодержательными. Пожалуйста, изложите вашу позицию более подробно.")
+                # Возвращаем пользователя на шаг ввода основных контраргументов
+                appealManager.set_user_state(user_id, CouncilStates["MAIN_ARG"], data)
+                return
+
             responder_info = f"{message.from_user.first_name} (@{message.from_user.username or 'скрыто'})"
             current_answers["responder_info"] = responder_info
 

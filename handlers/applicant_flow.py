@@ -20,6 +20,7 @@ class AppealStates:
     WAITING_Q3 = "waiting_q3"
 
 def _render_item_text(item: dict) -> str:
+    # ... (код без изменений) ...
     if not item: return ""
     if item.get("type") == "poll":
         p = item.get("poll", {})
@@ -39,6 +40,7 @@ def register_applicant_handlers(bot):
     """
     @bot.message_handler(commands=["start"], chat_types=['private'])
     def send_welcome(message):
+        # ... (код без изменений) ...
         user_id = message.from_user.id
         is_editor = appealManager.is_user_an_editor(bot, user_id, resolve_council_id())
 
@@ -58,6 +60,7 @@ def register_applicant_handlers(bot):
 
     @bot.callback_query_handler(func=lambda call: call.data == "start_appeal")
     def handle_start_appeal_callback(call):
+        # ... (код без изменений) ...
         user_id = call.from_user.id
         is_editor = appealManager.is_user_an_editor(bot, user_id, resolve_council_id())
 
@@ -74,9 +77,6 @@ def register_applicant_handlers(bot):
         bot.answer_callback_query(call.id)
         bot.send_message(call.message.chat.id, "Пожалуйста, пришлите ссылку на сообщение или опрос, решение в котором вы хотите оспорить.\n\nДля отмены в любой момент введите /cancel")
 
-    # ИСПРАВЛЕНО: обработчик /cancel перенесен в __init__.py и стал универсальным
-    # @bot.message_handler(commands=["cancel"], chat_types=['private']) ...
-
     @bot.message_handler(
         func=lambda message: (
                 appealManager.get_user_state(message.from_user.id) is not None and
@@ -88,7 +88,6 @@ def register_applicant_handlers(bot):
     def handle_fsm_messages(message):
         user_id = message.from_user.id
 
-        # ИСПРАВЛЕНО: Блокировка команд во время диалога
         if message.text.startswith('/'):
             if message.text.strip() != '/cancel':
                 bot.reply_to(message, "Пожалуйста, завершите текущий процесс или отмените его командой /cancel.")
@@ -105,6 +104,7 @@ def register_applicant_handlers(bot):
             return
 
         if state == AppealStates.WAITING_FOR_LINK:
+            # ... (код без изменений) ...
             is_valid, result = validate_appeal_link(bot, message.text, user_chat_id=message.chat.id)
             if not is_valid:
                 bot.reply_to(message, f"Ошибка: {result}")
@@ -148,12 +148,25 @@ def register_applicant_handlers(bot):
 
         elif state == AppealStates.WAITING_Q3:
             _update_appeal_answer(data["case_id"], "q3", message.text)
+
+            # ИСПРАВЛЕНО: Проверяем аргументы заявителя ПЕРЕД отправкой дела совету
+            case_id = data["case_id"]
+            appeal = appealManager.get_appeal(case_id)
+            main_args = appeal.get("applicant_arguments", "")
+
+            if not appealManager.are_arguments_meaningful(main_args):
+                bot.send_message(message.chat.id, "Ваши основные аргументы кажутся слишком короткими или несодержательными. Пожалуйста, изложите вашу позицию более подробно, чтобы Совет мог ее рассмотреть.")
+                # Возвращаем пользователя на шаг ввода основных аргументов
+                appealManager.set_user_state(user_id, AppealStates.WAITING_MAIN_ARGUMENT, data)
+                return
+
             appealManager.delete_user_state(user_id)
             bot.send_message(message.chat.id, "Спасибо, ваша апелляция полностью оформлена и отправлена на рассмотрение в Совет Редакторов. Вы получите уведомление, когда будет вынесен вердикт.")
-            request_counter_arguments(bot, data["case_id"])
+            request_counter_arguments(bot, case_id)
 
     @bot.callback_query_handler(func=lambda call: call.data.startswith("vote_"))
     def handle_vote_confirm_callback(call):
+        # ... (код без изменений) ...
         user_id = call.from_user.id
         state_data = appealManager.get_user_state(user_id)
         if not (state_data and state_data.get("state") == AppealStates.WAITING_VOTE_CONFIRM):
@@ -186,6 +199,7 @@ def register_applicant_handlers(bot):
         bot.answer_callback_query(call.id)
 
 def _update_appeal_answer(case_id, key, value):
+    # ... (код без изменений) ...
     appeal = appealManager.get_appeal(case_id)
     if appeal:
         current_answers = appeal.get("applicant_answers", {}) or {}

@@ -15,6 +15,7 @@ log = logging.getLogger("hjr-bot.council_helpers")
 _RESOLVED = {"value": None}
 
 def resolve_council_id() -> Optional[Union[int, str]]:
+    # ... (код без изменений) ...
     """
     Резолвит EDITORS_GROUP_ID из окружения в int (например -100...) или в username '@...'.
     Кеширует результат.
@@ -41,7 +42,9 @@ def resolve_council_id() -> Optional[Union[int, str]]:
     log.error(f"[council_helpers] cannot resolve EDITORS_GROUP_ID: '{raw}'")
     return None
 
+
 def is_link_from_council(bot, parsed_from_chat_id: Union[int, str]) -> bool:
+    # ... (код без изменений) ...
     """
     Проверяет, что parsed_from_chat_id соответствует EDITORS_GROUP_ID.
     """
@@ -74,7 +77,6 @@ def request_counter_arguments(bot, case_id: int):
         log.warning(f"[council_helpers] appeal #{case_id} not found for request_counter_arguments")
         return
 
-    # Извлекаем все необходимые данные
     decision_text = appeal.get("decision_text") or "(Содержимое оспариваемого решения отсутствует)"
     applicant_args = appeal.get("applicant_arguments") or "(Аргументы заявителя не указаны)"
     answers = appeal.get("applicant_answers") or {}
@@ -83,7 +85,7 @@ def request_counter_arguments(bot, case_id: int):
     q3 = answers.get("q3", "(нет ответа)")
     bot_username = bot.get_me().username
 
-    # --- КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: Новый текст с инструкцией ---
+    # ИСПРАВЛЕНО: Добавлено предупреждение для Совета
     request_text = (
         f"📣 *Запрос контраргументов по апелляции №{case_id}* 📣\n\n"
         f"Оспаривается следующее решение:\n"
@@ -98,6 +100,7 @@ def request_counter_arguments(bot, case_id: int):
         f"\n*Инструкция для редакторов:*\n"
         f"Для подачи контраргумента, пожалуйста, перейдите в личный чат с ботом (@{bot_username}) и отправьте ему следующую команду:\n\n"
         f"`/reply {case_id}`\n\n"
+        f"*ВАЖНО:* Если в течение 24 часов не будет предоставлено ни одного контраргумента, ИИ-арбитр вынесет решение, основываясь **только на аргументах заявителя**.\n"
         f"_(Срок: 24 часа)_"
     )
 
