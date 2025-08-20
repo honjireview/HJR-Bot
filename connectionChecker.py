@@ -15,10 +15,10 @@ def _normalize_dsn(dsn: str) -> str:
 
 def _create_and_migrate_tables(conn: psycopg.Connection):
     """
-    Создаёт таблицу appeals и добавляет недостающие колонки.
+    Создаёт и/или обновляет таблицы в базе данных до актуальной схемы.
     """
     with conn.cursor() as cur:
-        # Создаем таблицу со всеми колонками, если ее нет
+        # Создаем основную таблицу, если ее нет
         cur.execute("""
                     CREATE TABLE IF NOT EXISTS appeals (
                                                            case_id INTEGER PRIMARY KEY,
@@ -35,6 +35,11 @@ def _create_and_migrate_tables(conn: psycopg.Connection):
                                                            ai_verdict TEXT
                     );
                     """)
+
+        # ИСПРАВЛЕНО: Добавляем недостающие колонки, если их нет (миграция)
+        cur.execute("ALTER TABLE appeals ADD COLUMN IF NOT EXISTS message_thread_id INTEGER;")
+        cur.execute("ALTER TABLE appeals ADD COLUMN IF NOT EXISTS discussion_context TEXT;")
+
     conn.commit()
     print("Проверка и миграция таблицы 'appeals' завершена.")
 
@@ -48,8 +53,10 @@ def check_db_connection() -> bool:
         print("[ОШИБКА] PostgreSQL: Не найдена переменная окружения DATABASE_URL.")
         return False
     try:
-        db_conn = psycopg.connect(dsn, autocommit=True)
+        # Устанавливаем соединение с автокоммитом false для миграций
+        db_conn = psycopg.connect(dsn, autocommit=False)
         _create_and_migrate_tables(db_conn)
+        db_conn.autocommit = True # Возвращаем автокоммит для обычной работы
         print("[OK] PostgreSQL: Соединение установлено и таблица проверена.")
         return True
     except Exception as e:
@@ -75,7 +82,7 @@ def check_all_apis(bot) -> bool:
         return False
     try:
         genai.configure(api_key=GEMINI_API_KEY)
-        genai.get_model("models/gemini-1.5-flash-latest")
+        genai.get_model("models/gemini-1.5-pro-latest")
         print("[OK] Gemini API: Ключ успешно прошел аутентификацию.")
     except Exception as e:
         print(f"[ОШИБКА] Gemini API: {e}")
