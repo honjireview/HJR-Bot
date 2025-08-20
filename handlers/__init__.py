@@ -9,11 +9,12 @@ def register_all_handlers(bot):
     from . import council_flow
     from . import textcrafter_flow
     from . import admin_flow
+    from . import review_flow # ИСПРАВЛЕНО: Импортируем новый модуль
 
-    # user_states нужен только для textcrafter_flow
     user_states = {}
 
     @bot.message_handler(commands=['help'])
+    # ... (код без изменений) ...
     def send_help_text(message):
         help_text = """
 Здравствуйте! Я бот-ассистент проекта Honji Review. Моя задача — помогать с рутинными процессами и обеспечивать справедливость при помощи ИИ.
@@ -48,20 +49,19 @@ TextCrafter (Создание постов)
         bot.send_message(message.chat.id, help_text, disable_web_page_preview=True)
 
     @bot.message_handler(commands=['getid'])
+    # ... (код без изменений) ...
     def send_chat_id(message):
         chat_id = message.chat.id
         bot.reply_to(message, f"ID этого чата: `{chat_id}`")
 
-    # ИСПРАВЛЕНО: Универсальный обработчик /cancel
     @bot.message_handler(commands=['cancel'], chat_types=['private'])
+    # ... (код без изменений) ...
     def cancel_any_process(message):
         user_id = message.from_user.id
         state = appealManager.get_user_state(user_id)
         if state:
-            # Если в состоянии есть case_id (старая логика апелляций), удаляем дело
             if state.get("data", {}).get("case_id"):
                 case_id = state["data"]["case_id"]
-                # Проверяем, это апелляция или ответ совета
                 if not str(state.get("state")).startswith("council_"):
                     appealManager.delete_appeal(case_id)
             appealManager.delete_user_state(user_id)
@@ -72,5 +72,6 @@ TextCrafter (Создание постов)
     # --- Регистрация всех потоков ---
     applicant_flow.register_applicant_handlers(bot)
     council_flow.register_council_handlers(bot)
+    review_flow.register_review_handlers(bot) # ИСПРАВЛЕНО: Регистрируем новый обработчик
     textcrafter_flow.register_textcrafter_handlers(bot, user_states)
     admin_flow.register_admin_handlers(bot)

@@ -8,6 +8,7 @@ from telebot import apihelper
 db_conn = None
 
 def _normalize_dsn(dsn: str) -> str:
+    # ... (код без изменений) ...
     if not dsn: return dsn
     if dsn.startswith("postgres://"):
         return dsn.replace("postgres://", "postgresql://", 1)
@@ -18,7 +19,6 @@ def _create_and_migrate_tables(conn: psycopg.Connection):
     Создаёт и/или обновляет таблицы в базе данных до актуальной схемы.
     """
     with conn.cursor() as cur:
-        # Создаем основную таблицу, если ее нет
         cur.execute("""
                     CREATE TABLE IF NOT EXISTS appeals (
                                                            case_id INTEGER PRIMARY KEY,
@@ -36,14 +36,20 @@ def _create_and_migrate_tables(conn: psycopg.Connection):
                     );
                     """)
 
-        # ИСПРАВЛЕНО: Добавляем недостающие колонки, если их нет (миграция)
         cur.execute("ALTER TABLE appeals ADD COLUMN IF NOT EXISTS message_thread_id INTEGER;")
-        cur.execute("ALTER TABLE appeals ADD COLUMN IF NOT EXISTS discussion_context TEXT;")
+
+        # ИСПРАВЛЕНО: Убрана колонка, которую мы не можем получить
+        # cur.execute("ALTER TABLE appeals ADD COLUMN IF NOT EXISTS discussion_context TEXT;")
+
+        # ИСПРАВЛЕНО: Новые колонки для системы пересмотра
+        cur.execute("ALTER TABLE appeals ADD COLUMN IF NOT EXISTS is_reviewed BOOLEAN DEFAULT FALSE;")
+        cur.execute("ALTER TABLE appeals ADD COLUMN IF NOT EXISTS review_data JSONB;")
 
     conn.commit()
     print("Проверка и миграция таблицы 'appeals' завершена.")
 
 def check_db_connection() -> bool:
+    # ... (остальной код без изменений) ...
     """
     Устанавливает соединение с PostgreSQL и проверяет структуру таблицы.
     """

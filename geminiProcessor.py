@@ -7,7 +7,7 @@ from precedents import PRECEDENTS
 from handlers.telegraph_helpers import post_to_telegraph, markdown_to_html
 
 GEMINI_MODEL_NAME = "models/gemini-1.5-pro-latest"
-
+# ... (код до finalize_appeal без изменений) ...
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 gemini_model = None
 
@@ -29,6 +29,7 @@ def _read_file(filename: str, error_message: str) -> str:
         return error_message
 
 def get_verdict_from_gemini(appeal: dict, commit_hash: str, bot_version: str, log_id: int):
+    # ... (код без изменений) ...
     if not appeal:
         return "Ошибка: Не удалось найти данные по делу."
 
@@ -81,7 +82,6 @@ def get_verdict_from_gemini(appeal: dict, commit_hash: str, bot_version: str, lo
     final_instructions += f"\nВерсия релиза: {bot_version}"
     final_instructions += "\nОСОБОЕ ВНИМАНИЕ: При анализе строго придерживайтесь определений из раздела 'ТЕРМИНОЛОГИЯ' в уставе. **Сравни аргументы обеих сторон.**"
 
-    # ИСПРАВЛЕНО: Полностью переработана структура промпта для лучшего понимания ИИ
     prompt = f"""
 {final_instructions}
 {precedents_text}
@@ -112,7 +112,9 @@ def get_verdict_from_gemini(appeal: dict, commit_hash: str, bot_version: str, lo
         print(f"[ОШИБКА] Gemini API: {e}")
         return f"Ошибка при обращении к ИИ-арбитру. Детали: {e}"
 
+
 def finalize_appeal(appeal_data: dict, bot, commit_hash: str, bot_version: str):
+    # ... (код без изменений) ...
     if not isinstance(appeal_data, dict) or 'case_id' not in appeal_data:
         print(f"[CRITICAL_ERROR] В finalize_appeal переданы некорректные данные. Тип данных: {type(appeal_data)}")
         return
@@ -206,3 +208,20 @@ def finalize_appeal(appeal_data: dict, bot, commit_hash: str, bot_version: str):
     appealManager.update_appeal(case_id, "status", "closed")
     appealManager.log_interaction("SYSTEM", "appeal_closed", case_id)
     print(f"[FINALIZE] Дело #{case_id} успешно закрыто.")
+
+
+# ИСПРАВЛЕНО: Новая функция для пересмотра
+def finalize_review(appeal_data: dict, bot, commit_hash: str, bot_version: str):
+    case_id = appeal_data['case_id']
+    print(f"[FINALIZE_REVIEW] Начинаю ПЕРЕСМОТР дела #{case_id}")
+
+    log_id = appealManager.log_interaction("SYSTEM", "review_finalize_start", case_id)
+
+    # Формируем новый, сложный промпт
+    # ... (логика аналогична get_verdict_from_gemini, но с добавлением новых данных)
+
+    # ai_review_verdict = get_review_from_gemini(...)
+    # ... (далее логика отправки и закрытия дела со статусом closed_after_review)
+
+    # TODO: Полная реализация логики промпта и отправки для пересмотра
+    print(f"Функционал finalize_review для дела #{case_id} еще не реализован до конца.")

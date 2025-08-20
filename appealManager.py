@@ -24,18 +24,18 @@ def are_arguments_meaningful(text: str, min_length: int = 20) -> bool:
     return True
 
 # ИСПРАВЛЕНО: Новая функция для поиска похожих апелляций
-def find_similar_appeal(decision_text: str, similarity_threshold=0.9):
+def find_similar_appeal(decision_text: str, similarity_threshold=90):
     """Ищет в базе апелляции с похожим предметом спора."""
     try:
         conn = _get_conn()
         with conn.cursor() as cur:
-            cur.execute("SELECT case_id, decision_text FROM appeals WHERE status = 'closed'")
+            # ИСПРАВЛЕНО: Убрано условие "WHERE status = 'closed'"
+            cur.execute("SELECT case_id, decision_text FROM appeals")
             records = cur.fetchall()
 
             for record in records:
                 case_id, db_text = record
-                # Простое сравнение на схожесть, чтобы найти дубликаты или прецеденты
-                similarity = SequenceMatcher(None, decision_text, db_text).ratio()
+                similarity = fuzz.ratio(decision_text, db_text)
                 if similarity >= similarity_threshold:
                     return {"case_id": case_id, "similarity": similarity}
     except Exception as e:
