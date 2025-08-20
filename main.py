@@ -7,6 +7,7 @@ import subprocess
 from threading import Thread
 from flask import Flask, request, abort
 import telebot
+from datetime import datetime
 
 # --- ГЛОБАЛЬНАЯ ПЕРЕМЕННАЯ ДЛЯ ХЭША КОММИТА ---
 COMMIT_HASH = "N/A"
@@ -87,16 +88,13 @@ def startup_and_timer_tasks():
     log.info("Запущена фоновая задача проверки таймеров.")
     while True:
         try:
-            # ИСПРАВЛЕНО: Логика таймера полностью переработана
             appeals_in_collection = appealManager.get_appeals_in_collection()
-            for appeal in appeals_in_collection:
-                case_id = appeal['case_id']
-
-                # Проверяем, существует ли дело, прежде чем работать с ним
-                appeal_data = appealManager.get_appeal(case_id)
-                if not appeal_data:
-                    log.warning(f"Таймер: Дело #{case_id} найдено в списке, но не удалось получить его данные. Пропускаю.")
+            for appeal_data in appeals_in_collection:
+                # Пропускаем, если данные по какой-то причине некорректны
+                if not appeal_data or 'case_id' not in appeal_data:
                     continue
+
+                case_id = appeal_data['case_id']
 
                 # Логика досрочного завершения
                 expected_responses = appeal_data.get('expected_responses')
@@ -104,14 +102,16 @@ def startup_and_timer_tasks():
                     council_answers = appeal_data.get('council_answers') or []
                     if len(council_answers) >= expected_responses:
                         log.info(f"Досрочное завершение для дела #{case_id}: получено {len(council_answers)}/{expected_responses} ответов.")
-                        finalize_appeal(case_id, bot, COMMIT_HASH)
-                        continue # Переходим к следующему делу
+                        # ИСПРАВЛЕНО: Передаем уже полученные данные, а не ID
+                        finalize_appeal(appeal_data, bot, COMMIT_HASH)
+                        continue
 
                 # Логика завершения по истечении 24 часов
                 expires_at = appeal_data.get('timer_expires_at')
                 if expires_at and datetime.now(expires_at.tzinfo) > expires_at:
                     log.info(f"Найден просроченный таймер для дела #{case_id}. Запускаю финальное рассмотрение.")
-                    finalize_appeal(case_id, bot, COMMIT_HASH)
+                    # ИСПРАВЛЕНО: Передаем уже полученные данные, а не ID
+                    finalize_appeal(appeal_data, bot, COMMIT_HASH)
 
         except Exception as e:
             log.error(f"Критическая ошибка в фоновой задаче проверки таймеров: {e}")

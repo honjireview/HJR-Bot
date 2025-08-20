@@ -3,10 +3,8 @@ import os
 import google.generativeai as genai
 import appealManager
 from datetime import datetime
-# В connectionChecker больше нет GEMINI_MODEL_NAME, так что убираем его импорт
-# и определяем модель здесь, где она используется
-GEMINI_MODEL_NAME = "models/gemini-1.5-flash-latest"
 
+GEMINI_MODEL_NAME = "models/gemini-1.5-flash-latest"
 
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 gemini_model = None
@@ -28,20 +26,22 @@ def _read_file(filename: str, error_message: str) -> str:
         print(f"[ОШИБКА] Файл {filename} не найден.")
         return error_message
 
-def get_verdict_from_gemini(case_id, commit_hash, log_id):
+# ИСПРАВЛЕНО: Функция теперь принимает готовый словарь с данными дела
+def get_verdict_from_gemini(appeal: dict, commit_hash: str, log_id: int):
     """
-    Собирает все данные по делу, формирует детальный промпт и получает вердикт от Gemini.
+    Формирует детальный промпт и получает вердикт от Gemini на основе переданных данных.
     """
-    appeal = appealManager.get_appeal(case_id)
     if not appeal:
         return "Ошибка: Не удалось найти данные по делу."
 
+    case_id = appeal.get('case_id')
     project_rules = _read_file('rules.txt', "Устав проекта не найден.")
     instructions = _read_file('instructions.txt', "Инструкции для ИИ не найдены.")
 
-    applicant_info = appeal.get('applicant_info', {})
+    applicant_info = appeal.get('applicant_info', {}) or {}
     applicant_name = f"{applicant_info.get('first_name', 'Имя не указано')} (@{applicant_info.get('username', 'скрыто')})"
 
+    # ИСПРАВЛЕНО: Добавлена проверка на случай, если дата отсутствует
     created_at_dt = appeal.get('created_at')
     date_submitted = created_at_dt.strftime('%Y-%m-%d %H:%M UTC') if isinstance(created_at_dt, datetime) else "Неизвестно"
 
@@ -52,7 +52,7 @@ def get_verdict_from_gemini(case_id, commit_hash, log_id):
 - Дополнительный контекст: {appeal.get('applicant_answers', {}).get('q3', 'не указано')}
 """
 
-    council_answers_list = appeal.get('council_answers', [])
+    council_answers_list = appeal.get('council_answers', []) or []
     if council_answers_list:
         council_full_text = ""
         for answer in council_answers_list:
@@ -71,14 +71,11 @@ def get_verdict_from_gemini(case_id, commit_hash, log_id):
 
     prompt = f"""
 {final_instructions}
-
 **Устав проекта для анализа:**
 <rules>
 {project_rules}
 </rules>
-
 **ДЕТАЛИ ДЕЛА №{case_id}**
-
 1.  **Дата подачи:** {date_submitted}
 2.  **Заявитель:** {applicant_name}
 3.  **Предмет спора (оспариваемое решение):**
@@ -102,27 +99,25 @@ def get_verdict_from_gemini(case_id, commit_hash, log_id):
         print(f"[ОШИБКА] Gemini API: {e}")
         return f"Ошибка при обращении к ИИ-арбитру. Детали: {e}"
 
-def finalize_appeal(case_id, bot, commit_hash):
+# ИСПРАВЛЕНО: Функция теперь принимает готовый словарь с данными дела
+def finalize_appeal(appeal_data: dict, bot, commit_hash: str):
     """
     Получает вердикт от ИИ, формирует ПОЛНЫЙ пост и закрывает дело.
     """
-    print(f"[FINALIZE] Начинаю финальное рассмотрение дела #{case_id}")
-
-    appeal_data = appealManager.get_appeal(case_id)
-    if not appeal_data:
-        print(f"[CRITICAL_ERROR] Не удалось получить данные по делу #{case_id} для финализации.")
-        appealManager.log_interaction("SYSTEM", "finalize_error_no_case", case_id)
+    if not appeal_data or 'case_id' not in appeal_data:
+        print(f"[CRITICAL_ERROR] В finalize_appeal переданы некорректные данные.")
         return
+
+    case_id = appeal_data['case_id']
+    print(f"[FINALIZE] Начинаю финальное рассмотрение дела #{case_id}")
 
     log_id = appealManager.log_interaction("SYSTEM", "finalize_start", case_id)
 
-    # Получаем вердикт от ИИ
-    ai_verdict_text = get_verdict_from_gemini(case_id, commit_hash, log_id)
+    # ИСПРАВЛЕНО: Передаем уже имеющиеся данные, а не запрашиваем снова
+    ai_verdict_text = get_verdict_from_gemini(appeal_data, commit_hash, log_id)
     appealManager.update_appeal(case_id, "ai_verdict", ai_verdict_text)
 
-    # --- ИСПРАВЛЕНО: Формирование полного и структурированного поста ---
-
-    # Собираем данные по делу для поста
+    # ИСПРАВЛЕНО: Добавлена проверка на случай, если дата отсутствует
     created_at_dt = appeal_data.get('created_at')
     date_submitted = created_at_dt.strftime('%Y-%m-%d %H:%M UTC') if isinstance(created_at_dt, datetime) else "Неизвестно"
 
@@ -147,7 +142,6 @@ def finalize_appeal(case_id, bot, commit_hash):
     else:
         council_position = "_Совет не предоставил контраргументов._"
 
-    # Собираем финальное сообщение
     final_message = (
         f"⚖️ *Итоги рассмотрения апелляции №{case_id}*\n\n"
         f"**Дата подачи:** {date_submitted}\n"
@@ -160,10 +154,9 @@ def finalize_appeal(case_id, bot, commit_hash):
         f"👥 **Позиция Совета Редакторов:**\n"
         f"{council_position}\n\n"
         f"--- \n\n"
-        f"🤖 **{ai_verdict_text}**" # Вердикт ИИ теперь является заключительной частью
+        f"🤖 **{ai_verdict_text}**"
     )
 
-    # Отправляем сообщение
     applicant_chat_id = appeal_data.get('applicant_chat_id')
     appeals_channel_id = os.getenv('APPEALS_CHANNEL_ID')
 
