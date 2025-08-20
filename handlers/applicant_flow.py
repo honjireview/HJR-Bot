@@ -5,14 +5,15 @@ from datetime import datetime
 from telebot import types
 
 import appealManager
-from .telegram_helpers import validate_appeal_link, get_discussion_context
+# ИСПРАВЛЕНО: Убран импорт get_discussion_context
+from .telegram_helpers import validate_appeal_link
 from .council_helpers import request_counter_arguments, resolve_council_id
 
 log = logging.getLogger("hjr-bot.applicant_flow")
 CHARACTER_LIMIT = 4000
 
+# ... (остальной код до handle_fsm_messages без изменений) ...
 class AppealStates:
-    # ... (класс без изменений) ...
     WAITING_FOR_LINK = "waiting_for_link"
     WAITING_VOTE_CONFIRM = "waiting_vote_confirm"
     WAITING_MAIN_ARGUMENT = "waiting_main_argument"
@@ -21,7 +22,6 @@ class AppealStates:
     WAITING_Q3 = "waiting_q3"
 
 def _render_item_text(item: dict) -> str:
-    # ... (функция без изменений) ...
     if not item: return ""
     if item.get("type") == "poll":
         p = item.get("poll", {})
@@ -36,7 +36,6 @@ def _render_item_text(item: dict) -> str:
     return "(Не удалось отобразить содержимое)"
 
 def register_applicant_handlers(bot):
-    # ... (код до handle_fsm_messages без изменений) ...
     """
     Регистрирует все обработчики для процесса ПОДАЧИ апелляции.
     """
@@ -112,9 +111,8 @@ def register_applicant_handlers(bot):
             content_data = result
             decision_text = _render_item_text(content_data)
 
-            # ИСПРАВЛЕНО: Проверка на дубликаты
             similar_case = appealManager.find_similar_appeal(decision_text)
-            if similar_case and similar_case['similarity'] > 0.98: # >98% - это почти точная копия
+            if similar_case and similar_case['similarity'] > 98:
                 bot.reply_to(message, f"Похоже, апелляция по этому решению уже была рассмотрена (дело №{similar_case['case_id']}). Подача дубликата отменена.")
                 appealManager.delete_user_state(user_id)
                 return
@@ -127,13 +125,13 @@ def register_applicant_handlers(bot):
                 "applicant_chat_id": message.chat.id, "applicant_info": applicant_info,
                 "created_at": datetime.utcnow(), "decision_text": decision_text,
                 "total_voters": content_data.get("poll", {}).get("total_voter_count"), "status": "collecting",
-                "message_thread_id": content_data.get("thread_id") # Сохраняем ID топика
+                "message_thread_id": content_data.get("thread_id")
             }
             appealManager.create_appeal(new_case_id, initial_appeal_data)
 
-            # Получаем контекст обсуждения
-            discussion_context = get_discussion_context(bot, content_data['from_chat'], content_data['msg_id'], thread_id=content_data.get("thread_id"))
-            appealManager.update_appeal(new_case_id, 'discussion_context', discussion_context)
+            # ИСПРАВЛЕНО: Удален вызов неработающей функции
+            # discussion_context = get_discussion_context(...)
+            # appealManager.update_appeal(...)
 
             bot.send_message(message.chat.id, f"Ссылка принята. Вашему делу присвоен номер #{new_case_id}.")
 
@@ -146,7 +144,6 @@ def register_applicant_handlers(bot):
                 appealManager.set_user_state(user_id, AppealStates.WAITING_MAIN_ARGUMENT, data)
                 bot.send_message(message.chat.id, "Теперь, пожалуйста, изложите ваши основные аргументы.")
 
-        # ... (остальной код handle_fsm_messages и другие функции без изменений) ...
         elif state == AppealStates.WAITING_MAIN_ARGUMENT:
             appealManager.update_appeal(data["case_id"], "applicant_arguments", message.text)
             appealManager.set_user_state(user_id, AppealStates.WAITING_Q1, data)
