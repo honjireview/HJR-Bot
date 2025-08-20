@@ -3,7 +3,10 @@ import os
 import google.generativeai as genai
 import appealManager
 from datetime import datetime
-from connectionChecker import GEMINI_MODEL_NAME
+# В connectionChecker больше нет GEMINI_MODEL_NAME, так что убираем его импорт
+# и определяем модель здесь, где она используется
+GEMINI_MODEL_NAME = "models/gemini-1.5-flash-latest"
+
 
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 gemini_model = None
@@ -98,3 +101,32 @@ def get_verdict_from_gemini(case_id, commit_hash, log_id):
     except Exception as e:
         print(f"[ОШИБКА] Gemini API: {e}")
         return f"Ошибка при обращении к ИИ-арбитру. Детали: {e}"
+
+def finalize_appeal(case_id, bot, commit_hash):
+    """
+    Получает вердикт от ИИ, сохраняет его, отправляет результаты и закрывает дело.
+    """
+    print(f"[FINALIZE] Начинаю финальное рассмотрение дела #{case_id}")
+    log_id = appealManager.log_interaction("SYSTEM", "finalize_start", case_id)
+
+    verdict = get_verdict_from_gemini(case_id, commit_hash, log_id)
+    appealManager.update_appeal(case_id, "ai_verdict", verdict)
+
+    applicant_chat_id = appealManager.get_appeal(case_id).get('applicant_chat_id')
+    appeals_channel_id = os.getenv('APPEALS_CHANNEL_ID')
+
+    verdict_header = f"⚖️ *Вердикт ИИ-арбитра по делу №{case_id}*"
+    final_message = f"{verdict_header}\n\n{verdict}"
+
+    try:
+        if applicant_chat_id:
+            bot.send_message(applicant_chat_id, final_message, parse_mode="Markdown")
+        if appeals_channel_id:
+            bot.send_message(appeals_channel_id, final_message, parse_mode="Markdown")
+    except Exception as e:
+        print(f"[ОШИБКА] Не удалось отправить вердикт по делу #{case_id}: {e}")
+        appealManager.log_interaction("SYSTEM", "send_verdict_error", case_id, str(e))
+
+    appealManager.update_appeal(case_id, "status", "closed")
+    appealManager.log_interaction("SYSTEM", "appeal_closed", case_id)
+    print(f"[FINALIZE] Дело #{case_id} успешно закрыто.")

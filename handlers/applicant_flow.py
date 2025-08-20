@@ -10,7 +10,8 @@ import logging
 from datetime import datetime, timedelta
 
 import appealManager
-from .council_flow import finalize_appeal
+# ИСПРАВЛЕНО: Удалена некорректная строка импорта, вызывавшая ошибку
+# from .council_flow import finalize_appeal
 
 EDITORS_CHANNEL_ID = os.getenv('EDITORS_CHANNEL_ID')
 log = logging.getLogger("hjr-bot")

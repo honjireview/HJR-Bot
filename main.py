@@ -57,7 +57,8 @@ def health_check():
 
 # --- Фоновые задачи ---
 def startup_and_timer_tasks():
-    from handlers.council_flow import finalize_appeal
+    # ИСПРАВЛЕНО: Импортируем finalize_appeal из geminiProcessor
+    from geminiProcessor import finalize_appeal
     from handlers.admin_flow import sync_editors_list # <-- ИМПОРТИРУЕМ ФУНКЦИЮ
 
     log.info("Запуск фоновых задач...")
@@ -92,7 +93,8 @@ def startup_and_timer_tasks():
             for appeal in expired_appeals:
                 case_id = appeal['case_id']
                 log.info(f"Найден просроченный таймер для дела #{case_id}. Запускаю финальное рассмотрение.")
-                finalize_appeal(case_id, bot)
+                # ИСПРАВЛЕНО: Передаем COMMIT_HASH в функцию
+                finalize_appeal(case_id, bot, COMMIT_HASH)
         except Exception as e:
             log.error(f"Ошибка в фоновой задаче проверки таймеров: {e}")
         time.sleep(60)
