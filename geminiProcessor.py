@@ -4,7 +4,8 @@ import google.generativeai as genai
 import appealManager
 from datetime import datetime
 from precedents import PRECEDENTS
-from telegraph_helpers import post_to_telegraph, markdown_to_html
+# ИСПРАВЛЕНО: Указан правильный путь к файлу в папке handlers
+from handlers.telegraph_helpers import post_to_telegraph, markdown_to_html
 
 GEMINI_MODEL_NAME = "models/gemini-1.5-pro-latest"
 

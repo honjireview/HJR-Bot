@@ -9,9 +9,7 @@ log = logging.getLogger("hjr-bot.telegraph")
 telegraph = Telegraph()
 
 # Попытка создать/получить аккаунт для бота.
-# Это нужно, чтобы в будущем можно было редактировать посты.
 try:
-    # Используем токен доступа, если он есть, иначе создаем новый анонимный аккаунт
     access_token = telegraph.create_account(short_name='hjr-bot')
     log.info(f"Аккаунт Telegraph успешно создан/загружен. Access Token: {access_token}")
 except TelegraphException as e:
@@ -20,13 +18,6 @@ except TelegraphException as e:
 def post_to_telegraph(title: str, content_html: str) -> str:
     """
     Публикует контент в Telegra.ph и возвращает URL страницы.
-
-    Args:
-        title (str): Заголовок страницы.
-        content_html (str): Содержимое страницы в формате HTML.
-
-    Returns:
-        str: URL созданной страницы или None в случае ошибки.
     """
     try:
         response = telegraph.create_page(
@@ -43,12 +34,9 @@ def post_to_telegraph(title: str, content_html: str) -> str:
 def markdown_to_html(md_text: str) -> str:
     """
     Простой конвертер из Markdown (используемого Telegram) в HTML (для Telegraph).
-    Поддерживает **жирный**, *курсив*, ```код```.
     """
-    # Важно соблюдать порядок замен, чтобы не было конфликтов
     text = md_text.replace('```\n', '<pre>').replace('\n```', '</pre>').replace('```', '<pre>')
 
-    # Заменяем все вхождения, а не по одному
     parts = text.split('**')
     for i in range(1, len(parts), 2):
         parts[i] = f"<b>{parts[i]}</b>"
@@ -59,5 +47,5 @@ def markdown_to_html(md_text: str) -> str:
         parts[i] = f"<i>{parts[i]}</i>"
     text = "".join(parts)
 
-    text = text.replace('\n', '<br>') # Переносы строк
+    text = text.replace('\n', '<br>')
     return text
