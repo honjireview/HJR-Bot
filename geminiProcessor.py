@@ -1,14 +1,13 @@
 # -*- coding: utf-8 -*-
 import os
-import logging # ИСПРАВЛЕНО: Добавлен импорт logging
-import re # Импортируем для очистки тегов
+import logging
+import re
 import google.generativeai as genai
 import appealManager
 from datetime import datetime
 from precedents import PRECEDENTS
 from handlers.telegraph_helpers import post_to_telegraph, markdown_to_html
 
-# ИСПРАВЛЕНО: Инициализация логгера, которая отсутствовала
 log = logging.getLogger("hjr-bot.gemini")
 
 GEMINI_MODEL_NAME = "models/gemini-1.5-pro-latest"
@@ -108,24 +107,24 @@ def get_verdict_from_gemini(appeal: dict, commit_hash: str, bot_version: str, lo
     if not gemini_model:
         return "Ошибка: Модель Gemini не инициализирована."
     try:
-        print(f"--- Отправка запроса в Gemini API по делу #{case_id} (модель: {GEMINI_MODEL_NAME}) ---")
+        log.info(f"--- Отправка запроса в Gemini API по делу #{case_id} (модель: {GEMINI_MODEL_NAME}) ---")
         response = gemini_model.generate_content(prompt)
-        print(f"--- Ответ от Gemini API по делу #{case_id} получен ---")
+        log.info(f"--- Ответ от Gemini API по делу #{case_id} получен ---")
         return response.text
     except Exception as e:
-        print(f"[ОШИБКА] Gemini API: {e}")
+        log.error(f"ОШИБКА Gemini API: {e}")
         return f"Ошибка при обращении к ИИ-арбитру. Детали: {e}"
 
 def finalize_appeal(appeal_data: dict, bot, commit_hash: str, bot_version: str):
     if not isinstance(appeal_data, dict) or 'case_id' not in appeal_data:
-        print(f"[CRITICAL_ERROR] В finalize_appeal переданы некорректные данные. Тип данных: {type(appeal_data)}")
+        print(f"[CRITICAL_ERROR] В finalize_appeal переданы некорректные данные.")
         return
 
     case_id = appeal_data['case_id']
-    print(f"[FINALIZE] Начинаю финальное рассмотрение дела #{case_id}")
+    log.info(f"[FINALIZE] Начинаю финальное рассмотрение дела #{case_id}")
 
     if not appealManager.are_arguments_meaningful(appeal_data.get('applicant_arguments', '')):
-        print(f"[FINALIZE_SKIP] Дело #{case_id} пропущено из-за отсутствия осмысленных аргументов. Автоматически закрываю.")
+        log.warning(f"[FINALIZE_SKIP] Дело #{case_id} пропущено из-за отсутствия осмысленных аргументов.")
         appealManager.update_appeal(case_id, "status", "closed_invalid")
         appealManager.log_interaction("SYSTEM", "appeal_closed_invalid", case_id, "No valid arguments provided.")
         return
@@ -206,4 +205,44 @@ def finalize_appeal(appeal_data: dict, bot, commit_hash: str, bot_version: str):
 
     appealManager.update_appeal(case_id, "status", "closed")
     appealManager.log_interaction("SYSTEM", "appeal_closed", case_id)
-    print(f"[FINALIZE] Дело #{case_id} успешно закрыто.")
+    log.info(f"[FINALIZE] Дело #{case_id} успешно закрыто.")
+
+# ВОТ НЕДОСТАЮЩАЯ ФУНКЦИЯ
+def finalize_review(appeal_data: dict, bot, commit_hash: str, bot_version: str):
+    """
+    Формирует и отправляет на пересмотр дело, а затем публикует финальный вердикт.
+    """
+    case_id = appeal_data['case_id']
+    log.info(f"[FINALIZE_REVIEW] Начинаю ПЕРЕСМОТР дела #{case_id}")
+
+    log_id = appealManager.log_interaction("SYSTEM", "review_finalize_start", case_id)
+
+    # Здесь будет новая, усложненная логика формирования промпта для пересмотра
+    # TODO: Реализовать get_review_from_gemini по аналогии с get_verdict_from_gemini,
+    # но с добавлением review_data и другой инструкцией для ИИ.
+
+    ai_review_verdict = "Логика пересмотра еще не реализована. Это временный ответ." # Временная заглушка
+
+    # Публикация финального вердикта
+    final_verdict_text = (
+        f"⚖️ *Финальные итоги рассмотрения апелляции №{case_id} (ПОСЛЕ ПЕРЕСМОТРА)*\n\n"
+        f"**ID Финального Вердикта:** `{log_id}`\n\n"
+        f"--- \n\n"
+        f"🤖 **{ai_review_verdict}**"
+    )
+
+    applicant_chat_id = appeal_data.get('applicant_chat_id')
+    appeals_channel_id = os.getenv('APPEALS_CHANNEL_ID')
+
+    try:
+        # Логика отправки аналогична finalize_appeal, возможно, тоже через Telegraph
+        if applicant_chat_id:
+            bot.send_message(applicant_chat_id, final_verdict_text, parse_mode="Markdown")
+        if appeals_channel_id:
+            bot.send_message(appeals_channel_id, final_verdict_text, parse_mode="Markdown")
+    except Exception as e:
+        log.error(f"[ОШИБКА] Не удалось отправить вердикт по пересмотру дела #{case_id}: {e}")
+
+    appealManager.update_appeal(case_id, "status", "closed_after_review")
+    appealManager.log_interaction("SYSTEM", "appeal_closed_after_review", case_id)
+    log.info(f"[FINALIZE_REVIEW] Дело #{case_id} успешно закрыто после пересмотра.")
