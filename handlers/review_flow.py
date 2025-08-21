@@ -55,12 +55,12 @@ def register_review_handlers(bot):
             poll_question = f"Пересмотр вердикта по делу №{case_id}"
             poll_options = ['Да, пересмотреть', 'Нет, оставить в силе']
 
+            # ИСПРАВЛЕНО: Убран параметр open_period, чтобы положиться на наш таймер
             sent_poll_msg = bot.send_poll(
                 chat_id=message.chat.id,
                 question=poll_question,
                 options=poll_options,
-                is_anonymous=False,
-                open_period=18000 # 5 часов в секундах
+                is_anonymous=False
             )
 
             # Сохраняем информацию о голосовании в базу
