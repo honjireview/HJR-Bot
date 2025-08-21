@@ -18,6 +18,7 @@ def _create_and_migrate_tables(conn: psycopg.Connection):
     Создаёт и/или обновляет таблицы в базе данных до актуальной схемы.
     """
     with conn.cursor() as cur:
+        # Основная таблица апелляций
         cur.execute("""
                     CREATE TABLE IF NOT EXISTS appeals (
                                                            case_id INTEGER PRIMARY KEY,
@@ -39,8 +40,7 @@ def _create_and_migrate_tables(conn: psycopg.Connection):
                         );
                     """)
 
-        # ИСПРАВЛЕНО: Таблица состояний теперь использует TEXT для user_id,
-        # чтобы хранить и ID пользователей, и ID чатов.
+        # Таблица для состояний (FSM)
         cur.execute("""
                     CREATE TABLE IF NOT EXISTS user_states (
                                                                user_id TEXT PRIMARY KEY,
@@ -49,6 +49,20 @@ def _create_and_migrate_tables(conn: psycopg.Connection):
                                                                updated_at TIMESTAMPTZ DEFAULT NOW()
                         );
                     """)
+
+        # ИСПРАВЛЕНО: Миграция для изменения типа колонки в существующей таблице
+        # Это исправит ошибку 'invalid input syntax for type bigint'
+        try:
+            cur.execute("ALTER TABLE user_states ALTER COLUMN user_id TYPE TEXT;")
+            print("Миграция: Тип колонки user_states.user_id успешно изменен на TEXT.")
+        except psycopg.errors.DatatypeMismatch:
+            # Ошибка означает, что тип уже правильный, все в порядке
+            pass
+        except Exception as e:
+            # Игнорируем другие возможные ошибки, если колонка уже существует и используется
+            print(f"Информация при миграции user_states: {e}")
+            conn.rollback() # Откатываем транзакцию в случае ошибки, чтобы продолжить
+            pass
 
     conn.commit()
     print("Проверка и миграция таблиц завершена.")
