@@ -7,7 +7,7 @@ from .council_helpers import resolve_council_id
 
 log = logging.getLogger("hjr-bot.review_flow")
 
-REVIEW_STATE_WAITING_POLL = "review_state_waiting_poll_for_chat"
+# Определяем состояния для FSM
 REVIEW_STATE_WAITING_ARG = "review_state_waiting_arg_for_user"
 
 def register_review_handlers(bot):
@@ -48,12 +48,39 @@ def register_review_handlers(bot):
             bot.reply_to(message, "Это дело уже было пересмотрено.")
             return
 
-        chat_state_key = f"chat_{message.chat.id}"
-        data = {"case_id": case_id, "initiator_id": user_id}
-        appealManager.set_user_state(chat_state_key, REVIEW_STATE_WAITING_POLL, data)
-        log.info(f"[REVIEW] Установлено состояние {REVIEW_STATE_WAITING_POLL} для чата: {message.chat.id}")
+        log.info(f"[REVIEW] Инициирован пересмотр дела #{case_id} пользователем {user_id}")
 
-        bot.reply_to(message, f"Инициирован пересмотр дела №{case_id}. Ожидаю ссылку на закрытое голосование Совета по этому вопросу.")
+        try:
+            # Бот сам создает и отправляет голосование
+            poll_question = f"Пересмотр вердикта по делу №{case_id}"
+            poll_options = ['Да, пересмотреть', 'Нет, оставить в силе']
+
+            sent_poll_msg = bot.send_poll(
+                chat_id=message.chat.id,
+                question=poll_question,
+                options=poll_options,
+                is_anonymous=False,
+                open_period=18000 # 5 часов в секундах
+            )
+
+            # Сохраняем информацию о голосовании в базу
+            review_data = {
+                "poll_message_id": sent_poll_msg.message_id,
+                "poll_id": sent_poll_msg.poll.id
+            }
+            appealManager.update_appeal(case_id, "review_data", review_data)
+            appealManager.update_appeal(case_id, "status", "review_poll_pending")
+
+            # Устанавливаем таймер в базе данных на 5 часов
+            expires_at = datetime.utcnow() + timedelta(hours=5)
+            appealManager.update_appeal(case_id, "timer_expires_at", expires_at)
+
+            log.info(f"Создано голосование для пересмотра дела #{case_id}. Message ID: {sent_poll_msg.message_id}")
+            bot.reply_to(message, f"Создано голосование для пересмотра дела №{case_id}. Голосование будет автоматически закрыто через 5 часов.")
+
+        except Exception as e:
+            log.error(f"Не удалось создать голосование для пересмотра дела #{case_id}: {e}")
+            bot.reply_to(message, "Произошла ошибка при создании голосования.")
 
     @bot.message_handler(commands=['replyrecase'])
     def handle_reply_recase(message):
@@ -74,85 +101,12 @@ def register_review_handlers(bot):
         case_id = int(parts[1])
         appeal = appealManager.get_appeal(case_id)
         if not appeal or appeal.get("status") != 'reviewing':
-            bot.reply_to(message, f"Дело #{case_id} не найдено или сейчас не на стадии пересмотра.")
+            bot.reply_to(message, f"Дело #{case_id} не найдено или сейчас не на стадии сбора аргументов для пересмотра.")
             return
 
         data = {"case_id": case_id}
         appealManager.set_user_state(user_id, REVIEW_STATE_WAITING_ARG, data)
         bot.send_message(message.chat.id, f"Изложите ваши новые аргументы по делу №{case_id}.")
-
-    @bot.message_handler(
-        func=lambda message: (
-                message.chat.type in ['group', 'supergroup'] and
-                appealManager.get_user_state(f"chat_{message.chat.id}") is not None and
-                "t.me/" in message.text
-        ),
-        content_types=['text']
-    )
-    def handle_review_poll_link(message):
-        chat_id_key = f"chat_{message.chat.id}"
-        state_data = appealManager.get_user_state(chat_id_key)
-
-        if state_data.get("state") != REVIEW_STATE_WAITING_POLL:
-            return
-
-        case_id = state_data.get("data", {}).get("case_id")
-        log.info(f"[REVIEW_FSM] В чате {message.chat.id} получена ссылка для пересмотра дела #{case_id}")
-
-        is_valid, result = validate_appeal_link(bot, message.text, user_chat_id=message.chat.id)
-        if not is_valid:
-            bot.reply_to(message, f"Ошибка валидации ссылки: {result}")
-            return
-
-        if result.get("type") != "poll":
-            bot.reply_to(message, "Ошибка: Присланная ссылка ведет не на опрос.")
-            return
-
-        poll_data = result.get("poll", {})
-        question = poll_data.get("question", "").lower()
-
-        if "пересмотр" not in question or str(case_id) not in question:
-            bot.reply_to(message, f"Текст опроса не соответствует делу №{case_id} или не содержит слова 'пересмотр'.")
-            return
-
-        council_id = resolve_council_id()
-        total_members = bot.get_chat_member_count(council_id) - 1
-        inactive_members = appealManager.count_inactive_editors()
-        active_members = total_members - inactive_members
-        threshold = active_members / 2
-
-        log.debug(f"[REVIEW_FSM] Проверка большинства: Всего={total_members}, Неактивных={inactive_members}, Активных={active_members}, Порог={threshold}")
-
-        options = poll_data.get("options", [])
-        for_votes = 0
-        for opt in options:
-            if "за" in opt.get("text", "").lower():
-                for_votes = opt.get("voter_count", 0)
-
-        log.debug(f"[REVIEW_FSM] Результаты голосования: {for_votes} 'За'.")
-
-        if for_votes <= threshold:
-            log.warning(f"[REVIEW_FSM] Голосование по делу #{case_id} не набрало большинства ({for_votes} <= {threshold}).")
-            bot.reply_to(message, f"Решение о пересмотре не было принято абсолютным большинством голосов активных редакторов (необходимо >{int(threshold)}). Операция отменена.")
-            appealManager.delete_user_state(chat_id_key)
-            return
-
-        log.info(f"[REVIEW_FSM] Все проверки для пересмотра дела #{case_id} пройдены.")
-        appealManager.update_appeal(case_id, "status", "reviewing")
-        appealManager.update_appeal(case_id, "is_reviewed", True)
-
-        review_data = {"poll": poll_data}
-        appealManager.update_appeal(case_id, "review_data", review_data)
-
-        expires_at = datetime.utcnow() + timedelta(hours=24)
-        appealManager.update_appeal(case_id, "timer_expires_at", expires_at)
-
-        bot.reply_to(message, f"Голосование по делу №{case_id} принято. Начался 24-часовой сбор дополнительных аргументов.")
-
-        appeal = appealManager.get_appeal(case_id)
-        thread_id = appeal.get("message_thread_id")
-        bot.send_message(message.chat.id, f"📣 Члены Совета могут предоставить аргументы через команду `/replyrecase {case_id}` в личном чате с ботом.", message_thread_id=thread_id)
-        appealManager.delete_user_state(chat_id_key)
 
     @bot.message_handler(
         func=lambda message: (

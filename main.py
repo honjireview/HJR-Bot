@@ -9,7 +9,6 @@ from flask import Flask, request, abort
 import telebot
 from datetime import datetime
 
-# ... (код до startup_and_timer_tasks без изменений) ...
 # --- ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ---
 COMMIT_HASH = os.getenv("RAILWAY_GIT_COMMIT_SHA", "N/A")[:7]
 print(f"[INFO] Версия коммита определена как: {COMMIT_HASH}")
@@ -23,6 +22,7 @@ log = logging.getLogger("hjr-bot")
 # --- Переменные окружения ---
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 WEBHOOK_BASE_URL = os.getenv("WEBHOOK_BASE_URL")
+COUNCIL_CHAT_ID = os.getenv("EDITORS_GROUP_ID") # Используем для stop_poll
 
 if not TELEGRAM_TOKEN:
     raise RuntimeError("Не найден TELEGRAM_TOKEN в окружении.")
@@ -35,6 +35,7 @@ app = Flask(__name__)
 import connectionChecker
 import appealManager
 from handlers import register_all_handlers
+from handlers.council_helpers import resolve_council_id
 
 # --- Регистрация обработчиков ---
 register_all_handlers(bot)
@@ -52,14 +53,11 @@ def telegram_webhook():
 def health_check():
     return "Bot is running.", 200
 
-
 def startup_and_timer_tasks():
-    # ИСПРАВЛЕНО: Импортируем обе функции финализации
     from geminiProcessor import finalize_appeal, finalize_review
     from handlers.admin_flow import sync_editors_list
 
     log.info("Запуск фоновых задач...")
-    # ... (код до цикла while без изменений) ...
     time.sleep(3)
 
     if not connectionChecker.check_all_apis(bot):
@@ -86,7 +84,7 @@ def startup_and_timer_tasks():
     log.info("Запущена фоновая задача проверки таймеров.")
     while True:
         try:
-            active_appeals = appealManager.get_appeals_in_collection() # Имя функции было изменено ранее
+            active_appeals = appealManager.get_appeals_in_collection()
             for appeal_data in active_appeals:
                 if not appeal_data or 'case_id' not in appeal_data:
                     continue
@@ -95,24 +93,55 @@ def startup_and_timer_tasks():
                 status = appeal_data.get('status')
                 expires_at = appeal_data.get('timer_expires_at')
 
-                # Логика для обычных апелляций
-                if status == 'collecting':
-                    expected_responses = appeal_data.get('expected_responses')
-                    if expected_responses is not None and expected_responses > 0:
-                        council_answers = appeal_data.get('council_answers') or []
-                        if len(council_answers) >= expected_responses:
-                            log.info(f"Досрочное завершение для дела #{case_id}")
-                            finalize_appeal(appeal_data, bot, COMMIT_HASH, BOT_VERSION)
-                            continue
-
-                # Общая логика для всех по истечению таймера
-                if expires_at and datetime.now(expires_at.tzinfo) > expires_at:
+                # Проверяем, истек ли таймер
+                if not (expires_at and datetime.now(expires_at.tzinfo) > expires_at):
+                    # Если таймер не истек, проверяем на досрочное завершение для обычных апелляций
                     if status == 'collecting':
-                        log.info(f"Просроченный таймер для дела #{case_id}.")
-                        finalize_appeal(appeal_data, bot, COMMIT_HASH, BOT_VERSION)
-                    elif status == 'reviewing':
-                        log.info(f"Просроченный таймер для ПЕРЕСМОТРА дела #{case_id}.")
-                        finalize_review(appeal_data, bot, COMMIT_HASH, BOT_VERSION)
+                        expected_responses = appeal_data.get('expected_responses')
+                        if expected_responses is not None and expected_responses > 0:
+                            council_answers = appeal_data.get('council_answers') or []
+                            if len(council_answers) >= expected_responses:
+                                log.info(f"Досрочное завершение для дела #{case_id}")
+                                finalize_appeal(appeal_data, bot, COMMIT_HASH, BOT_VERSION)
+                    continue # Переходим к следующему делу, если таймер не истек
+
+                # Если таймер истек, обрабатываем в зависимости от статуса
+                if status == 'collecting':
+                    log.info(f"Просроченный таймер для дела #{case_id}.")
+                    finalize_appeal(appeal_data, bot, COMMIT_HASH, BOT_VERSION)
+
+                elif status == 'review_poll_pending':
+                    log.info(f"Таймер голосования по пересмотру дела #{case_id} истек. Проверяю результаты.")
+                    review_data = appeal_data.get('review_data', {})
+                    poll_message_id = review_data.get('poll_message_id')
+
+                    if poll_message_id and COUNCIL_CHAT_ID:
+                        final_poll = bot.stop_poll(COUNCIL_CHAT_ID, poll_message_id)
+
+                        total_members = bot.get_chat_member_count(COUNCIL_CHAT_ID) - 1
+                        inactive_members = appealManager.count_inactive_editors()
+                        active_members = total_members - inactive_members
+                        threshold = active_members / 2
+
+                        for_votes = 0
+                        for opt in final_poll.options:
+                            if "да" in opt.text.lower():
+                                for_votes = opt.voter_count
+
+                        if for_votes > threshold:
+                            log.info(f"Пересмотр дела #{case_id} одобрен ({for_votes} > {threshold}).")
+                            appealManager.update_appeal(case_id, "status", "reviewing")
+                            new_expires_at = datetime.utcnow() + timedelta(hours=24)
+                            appealManager.update_appeal(case_id, "timer_expires_at", new_expires_at)
+                            bot.send_message(COUNCIL_CHAT_ID, f"📣 Пересмотр дела №{case_id} одобрен Советом. Начался 24-часовой сбор дополнительных аргументов через команду `/replyrecase {case_id}` в ЛС.", message_thread_id=appeal_data.get("message_thread_id"))
+                        else:
+                            log.info(f"Пересмотр дела #{case_id} отклонен ({for_votes} <= {threshold}).")
+                            appealManager.update_appeal(case_id, "status", "closed") # Возвращаем статус
+                            bot.send_message(COUNCIL_CHAT_ID, f"Пересмотр дела №{case_id} не набрал абсолютного большинства голосов и был отклонен.", message_thread_id=appeal_data.get("message_thread_id"))
+
+                elif status == 'reviewing':
+                    log.info(f"Просроченный таймер для ПЕРЕСМОТРА дела #{case_id}.")
+                    finalize_review(appeal_data, bot, COMMIT_HASH, BOT_VERSION)
 
         except Exception as e:
             log.error(f"Критическая ошибка в фоновой задаче: {e}", exc_info=True)
