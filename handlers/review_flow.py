@@ -17,16 +17,16 @@ def register_review_handlers(bot):
     """
     Регистрирует обработчики для процесса ПЕРЕСМОТРА вердикта ИИ.
     """
-    @bot.message_handler(commands=['recase'], chat_types=['private'])
+    @bot.message_handler(commands=['recase'])
     def handle_recase(message):
-        user_id = message.from_user.id
-        log.info(f"[REVIEW] Команда /recase от user_id: {user_id}")
-
-        # ИСПРАВЛЕНО: Проверка на тип чата
-        if message.chat.type != 'private':
-            bot.reply_to(message, "Эту команду можно использовать только в личном чате с ботом.")
+        # ИСПРАВЛЕНО: Команда теперь работает только в группе
+        if message.chat.type not in ['group', 'supergroup']:
+            bot.reply_to(message, "Эту команду можно использовать только в чате Совета.")
             return
 
+        user_id = message.from_user.id
+        log.info(f"[REVIEW] Команда /recase от user_id: {user_id} в чате {message.chat.id}")
+        # ... (остальная логика команды без изменений) ...
         is_editor = appealManager.is_user_an_editor(bot, user_id, resolve_council_id())
         if not is_editor:
             return
@@ -53,18 +53,18 @@ def register_review_handlers(bot):
         data = {"case_id": case_id}
         appealManager.set_user_state(user_id, ReviewStates["WAITING_POLL"], data)
         log.info(f"[REVIEW] Установлено состояние {ReviewStates['WAITING_POLL']} для user_id: {user_id}, case_id: {case_id}")
-        bot.send_message(message.chat.id, f"Вы инициировали пересмотр дела №{case_id}.\n\nПожалуйста, пришлите ссылку на закрытое голосование Совета, по результатам которого было принято решение о пересмотре.")
+        bot.send_message(user_id, f"Вы инициировали пересмотр дела №{case_id}.\n\nПожалуйста, пришлите ссылку на закрытое голосование Совета, по результатам которого было принято решение о пересмотре.")
 
-    @bot.message_handler(commands=['replyrecase'], chat_types=['private'])
+    @bot.message_handler(commands=['replyrecase'])
     def handle_reply_recase(message):
-        user_id = message.from_user.id
-        log.info(f"[REVIEW] Команда /replyrecase от user_id: {user_id}")
-
-        # ИСПРАВЛЕНО: Проверка на тип чата
+        # ИСПРАВЛЕНО: Команда теперь работает только в ЛС
         if message.chat.type != 'private':
-            bot.reply_to(message, "Эту команду можно использовать только в личном чате с ботом.")
+            bot.reply_to(message, "Эту команду можно использовать только в личном чате с ботом, чтобы предоставить аргументы.")
             return
 
+        user_id = message.from_user.id
+        log.info(f"[REVIEW] Команда /replyrecase от user_id: {user_id}")
+        # ... (остальная логика команды без изменений) ...
         is_editor = appealManager.is_user_an_editor(bot, user_id, resolve_council_id())
         if not is_editor:
             return
@@ -86,7 +86,7 @@ def register_review_handlers(bot):
         log.info(f"[REVIEW] Установлено состояние {ReviewStates['WAITING_ARG']} для user_id: {user_id}, case_id: {case_id}")
         bot.send_message(message.chat.id, f"Изложите ваши новые аргументы или доказательства по делу №{case_id}, которые не были учтены в первом вердикте.")
 
-    # ... (остальной код файла без изменений) ...
+    # ... (остальной код FSM без изменений) ...
     @bot.message_handler(
         func=lambda message: (
                 appealManager.get_user_state(message.from_user.id) is not None and

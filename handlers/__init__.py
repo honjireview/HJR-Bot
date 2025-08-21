@@ -9,7 +9,7 @@ def register_all_handlers(bot):
     from . import council_flow
     from . import textcrafter_flow
     from . import admin_flow
-    from . import review_flow # ИСПРАВЛЕНО: Импортируем новый модуль
+    from . import review_flow
 
     user_states = {}
 
@@ -48,11 +48,9 @@ TextCrafter (Создание постов)
 """
         bot.send_message(message.chat.id, help_text, disable_web_page_preview=True)
 
-    @bot.message_handler(commands=['getid'])
-    # ... (код без изменений) ...
-    def send_chat_id(message):
-        chat_id = message.chat.id
-        bot.reply_to(message, f"ID этого чата: `{chat_id}`")
+    # ИСПРАВЛЕНО: Удален старый обработчик /getid, который конфликтовал с новым
+    # @bot.message_handler(commands=['getid'])
+    # def send_chat_id(message): ...
 
     @bot.message_handler(commands=['cancel'], chat_types=['private'])
     # ... (код без изменений) ...
@@ -72,6 +70,6 @@ TextCrafter (Создание постов)
     # --- Регистрация всех потоков ---
     applicant_flow.register_applicant_handlers(bot)
     council_flow.register_council_handlers(bot)
-    review_flow.register_review_handlers(bot) # ИСПРАВЛЕНО: Регистрируем новый обработчик
+    review_flow.register_review_handlers(bot)
     textcrafter_flow.register_textcrafter_handlers(bot, user_states)
     admin_flow.register_admin_handlers(bot)

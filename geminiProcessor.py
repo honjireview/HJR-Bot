@@ -1,12 +1,15 @@
 # -*- coding: utf-8 -*-
 import os
+import logging # ИСПРАВЛЕНО: Добавлен импорт logging
 import google.generativeai as genai
 import appealManager
 from datetime import datetime
 from precedents import PRECEDENTS
 from handlers.telegraph_helpers import post_to_telegraph, markdown_to_html
 
-# ... (код до finalize_appeal без изменений) ...
+# ИСПРАВЛЕНО: Инициализация логгера, которая отсутствовала
+log = logging.getLogger("hjr-bot.gemini")
+
 GEMINI_MODEL_NAME = "models/gemini-1.5-pro-latest"
 
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
