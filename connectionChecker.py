@@ -18,7 +18,7 @@ def _create_and_migrate_tables(conn: psycopg.Connection):
     Создаёт и/или обновляет таблицы в базе данных до актуальной схемы.
     """
     with conn.cursor() as cur:
-        # Основная таблица
+        # Основная таблица апелляций
         cur.execute("""
                     CREATE TABLE IF NOT EXISTS appeals (
                                                            case_id INTEGER PRIMARY KEY,
@@ -27,25 +27,32 @@ def _create_and_migrate_tables(conn: psycopg.Connection):
                                                            applicant_arguments TEXT,
                                                            applicant_answers JSONB,
                                                            council_answers JSONB,
-                                                           voters_to_mention TEXT[],
                                                            total_voters INTEGER,
                                                            status TEXT,
                                                            expected_responses INTEGER,
                                                            timer_expires_at TIMESTAMPTZ,
-                                                           ai_verdict TEXT
-                    );
+                                                           ai_verdict TEXT,
+                                                           message_thread_id INTEGER,
+                                                           is_reviewed BOOLEAN DEFAULT FALSE,
+                                                           review_data JSONB,
+                                                           commit_hash VARCHAR(40),
+                        verdict_log_id INTEGER
+                        );
                     """)
 
-        # Миграции: Добавляем недостающие колонки, если их нет
-        cur.execute("ALTER TABLE appeals ADD COLUMN IF NOT EXISTS message_thread_id INTEGER;")
-        cur.execute("ALTER TABLE appeals ADD COLUMN IF NOT EXISTS is_reviewed BOOLEAN DEFAULT FALSE;")
-        cur.execute("ALTER TABLE appeals ADD COLUMN IF NOT EXISTS review_data JSONB;")
-        # ИСПРАВЛЕНО: Добавляем колонки для хеша коммита и ID вердикта
-        cur.execute("ALTER TABLE appeals ADD COLUMN IF NOT EXISTS commit_hash VARCHAR(40);")
-        cur.execute("ALTER TABLE appeals ADD COLUMN IF NOT EXISTS verdict_log_id INTEGER;")
+        # Таблица для состояний (FSM)
+        # ИСПРАВЛЕНО: user_id теперь TEXT, чтобы хранить и int, и str
+        cur.execute("""
+                    CREATE TABLE IF NOT EXISTS user_states (
+                                                               user_id TEXT PRIMARY KEY,
+                                                               state TEXT,
+                                                               data JSONB,
+                                                               updated_at TIMESTAMPTZ DEFAULT NOW()
+                        );
+                    """)
 
     conn.commit()
-    print("Проверка и миграция таблицы 'appeals' завершена.")
+    print("Проверка и миграция таблиц завершена.")
 
 def check_db_connection() -> bool:
     """

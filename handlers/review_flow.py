@@ -18,7 +18,6 @@ def register_review_handlers(bot):
     """
     @bot.message_handler(commands=['recase'])
     def handle_recase(message):
-        # Эта команда теперь работает только в группе Совета
         if message.chat.type not in ['group', 'supergroup']:
             bot.reply_to(message, "Эту команду можно использовать только в чате Совета.")
             return
@@ -62,7 +61,6 @@ def register_review_handlers(bot):
 
     @bot.message_handler(commands=['replyrecase'])
     def handle_reply_recase(message):
-        # Эта команда по-прежнему работает только в ЛС
         if message.chat.type != 'private':
             bot.reply_to(message, "Эту команду можно использовать только в личном чате с ботом.")
             return
@@ -85,6 +83,7 @@ def register_review_handlers(bot):
 
         data = {"case_id": case_id}
         appealManager.set_user_state(user_id, REVIEW_STATE_WAITING_ARG, data)
+        log.info(f"[REVIEW] Установлено состояние {REVIEW_STATE_WAITING_ARG} для user_id: {user_id}, case_id: {case_id}")
         bot.send_message(message.chat.id, f"Изложите ваши новые аргументы по делу №{case_id}.")
 
     # Новый обработчик, который "слушает" ссылки ТОЛЬКО в чате, где была вызвана /recase
@@ -100,7 +99,6 @@ def register_review_handlers(bot):
         chat_id_key = f"chat_{message.chat.id}"
         state_data = appealManager.get_user_state(chat_id_key)
 
-        # Двойная проверка, что мы в правильном состоянии
         if state_data.get("state") != REVIEW_STATE_WAITING_POLL:
             return
 
@@ -131,7 +129,7 @@ def register_review_handlers(bot):
 
         if for_votes <= (poll_data.get("total_voter_count", 0) / 2):
             bot.reply_to(message, "Решение о пересмотре не было принято большинством голосов.")
-            appealManager.delete_user_state(chat_id_key) # Сбрасываем состояние чата
+            appealManager.delete_user_state(chat_id_key)
             return
 
         log.info(f"[REVIEW_FSM] Все проверки для пересмотра дела #{case_id} пройдены.")

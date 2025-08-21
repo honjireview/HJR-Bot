@@ -5,7 +5,6 @@ import json
 import psycopg
 import logging
 from datetime import datetime
-# ИСПРАВЛЕНО: Добавлен недостающий импорт, который вызывал ошибку
 from thefuzz import fuzz
 
 import connectionChecker
@@ -13,7 +12,6 @@ import connectionChecker
 log = logging.getLogger("hjr-bot.appeal_manager")
 
 def are_arguments_meaningful(text: str, min_length: int = 20) -> bool:
-    # ... (код без изменений) ...
     if not text:
         return False
     text = text.strip().lower()
@@ -28,7 +26,6 @@ def find_similar_appeal(decision_text: str, similarity_threshold=90):
     try:
         conn = _get_conn()
         with conn.cursor() as cur:
-            # ИСПРАВЛЕНО: Поиск теперь идет по всем делам, а не только закрытым
             cur.execute("SELECT case_id, decision_text FROM appeals")
             records = cur.fetchall()
 
@@ -43,8 +40,6 @@ def find_similar_appeal(decision_text: str, similarity_threshold=90):
         log.error(f"[ОШИБКА] Не удалось найти похожие апелляции: {e}")
     return None
 
-
-# ... (остальной код файла без изменений) ...
 def _get_conn():
     conn = connectionChecker.db_conn
     if conn is None or conn.closed:
@@ -96,7 +91,6 @@ def update_appeal(case_id, key, value):
             if isinstance(value, (dict, list)):
                 value = json.dumps(value)
 
-            # Используем psycopg.sql для безопасной вставки имен колонок
             query = psycopg.sql.SQL("UPDATE appeals SET {key} = %s WHERE case_id = %s").format(
                 key=psycopg.sql.Identifier(key)
             )
@@ -152,11 +146,13 @@ def get_active_appeal_by_user(user_id):
         log.error(f"[ОШИБКА] Не удалось проверить активные апелляции для user_id {user_id}: {e}")
     return None
 
+# ИСПРАВЛЕНО: Функция теперь работает с текстовыми ID
 def get_user_state(user_id):
+    """Получает состояние по ID (может быть int для юзера или str для чата)."""
     try:
         conn = _get_conn()
         with conn.cursor() as cur:
-            cur.execute("SELECT state, data FROM user_states WHERE user_id = %s", (user_id,))
+            cur.execute("SELECT state, data FROM user_states WHERE user_id = %s", (str(user_id),))
             record = cur.fetchone()
             if record:
                 return {"state": record[0], "data": record[1] or {}}
@@ -164,7 +160,9 @@ def get_user_state(user_id):
         log.error(f"[ОШИБКА] Не удалось получить состояние для user_id {user_id}: {e}")
     return None
 
+# ИСПРАВЛЕНО: Функция теперь работает с текстовыми ID
 def set_user_state(user_id, state, data=None):
+    """Устанавливает состояние по ID (может быть int для юзера или str для чата)."""
     try:
         conn = _get_conn()
         with conn.cursor() as cur:
@@ -176,7 +174,7 @@ def set_user_state(user_id, state, data=None):
                     ON CONFLICT (user_id) DO UPDATE SET
                     state = EXCLUDED.state, data = EXCLUDED.data, updated_at = NOW();
                 """,
-                (user_id, state, data_json)
+                (str(user_id), state, data_json)
             )
         conn.commit()
     except Exception as e:
@@ -186,7 +184,7 @@ def delete_user_state(user_id):
     try:
         conn = _get_conn()
         with conn.cursor() as cur:
-            cur.execute("DELETE FROM user_states WHERE user_id = %s", (user_id,))
+            cur.execute("DELETE FROM user_states WHERE user_id = %s", (str(user_id),))
         conn.commit()
     except Exception as e:
         log.error(f"[ОШИБКА] Не удалось удалить состояние для user_id {user_id}: {e}")
