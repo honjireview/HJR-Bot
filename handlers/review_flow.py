@@ -19,16 +19,19 @@ def register_review_handlers(bot):
     """
     @bot.message_handler(commands=['recase'])
     def handle_recase(message):
-        # ИСПРАВЛЕНО: Команда теперь работает только в группе
         if message.chat.type not in ['group', 'supergroup']:
-            bot.reply_to(message, "Эту команду можно использовать только в чате Совета.")
+            bot.reply_to(message, "Эту команду можно использовать только в чате Совета. Пожалуйста, напишите ее там.")
+            return
+
+        council_id = resolve_council_id()
+        if message.chat.id != council_id:
+            bot.reply_to(message, "Эту команду можно использовать только в официальном чате Совета Редакторов.")
             return
 
         user_id = message.from_user.id
-        log.info(f"[REVIEW] Команда /recase от user_id: {user_id} в чате {message.chat.id}")
-        # ... (остальная логика команды без изменений) ...
-        is_editor = appealManager.is_user_an_editor(bot, user_id, resolve_council_id())
+        is_editor = appealManager.is_user_an_editor(bot, user_id, council_id)
         if not is_editor:
+            bot.reply_to(message, "Только редакторы могут инициировать пересмотр дела.")
             return
 
         parts = message.text.split()
@@ -37,14 +40,13 @@ def register_review_handlers(bot):
             return
 
         case_id = int(parts[1])
-        log.info(f"[REVIEW] Пользователь {user_id} запросил пересмотр дела #{case_id}")
         appeal = appealManager.get_appeal(case_id)
 
         if not appeal:
             bot.reply_to(message, f"Дело #{case_id} не найдено.")
             return
         if appeal.get("status") != 'closed':
-            bot.reply_to(message, f"Пересмотр возможен только для дел со статусом 'closed'. Статус этого дела: '{appeal.get('status')}'.")
+            bot.reply_to(message, f"Пересмотр возможен только для закрытых дел. Статус этого дела: '{appeal.get('status')}'.")
             return
         if appeal.get("is_reviewed"):
             bot.reply_to(message, "Это дело уже было пересмотрено, повторный пересмотр невозможен.")
@@ -52,19 +54,15 @@ def register_review_handlers(bot):
 
         data = {"case_id": case_id}
         appealManager.set_user_state(user_id, ReviewStates["WAITING_POLL"], data)
-        log.info(f"[REVIEW] Установлено состояние {ReviewStates['WAITING_POLL']} для user_id: {user_id}, case_id: {case_id}")
-        bot.send_message(user_id, f"Вы инициировали пересмотр дела №{case_id}.\n\nПожалуйста, пришлите ссылку на закрытое голосование Совета, по результатам которого было принято решение о пересмотре.")
+        bot.send_message(user_id, f"Вы инициировали пересмотр дела №{case_id} в чате Совета.\n\nТеперь, пожалуйста, пришлите мне сюда (в личные сообщения) ссылку на закрытое голосование, по результатам которого было принято это решение.")
 
     @bot.message_handler(commands=['replyrecase'])
     def handle_reply_recase(message):
-        # ИСПРАВЛЕНО: Команда теперь работает только в ЛС
         if message.chat.type != 'private':
-            bot.reply_to(message, "Эту команду можно использовать только в личном чате с ботом, чтобы предоставить аргументы.")
+            bot.reply_to(message, "Эту команду можно использовать только в личном чате с ботом для предоставления аргументов.")
             return
 
         user_id = message.from_user.id
-        log.info(f"[REVIEW] Команда /replyrecase от user_id: {user_id}")
-        # ... (остальная логика команды без изменений) ...
         is_editor = appealManager.is_user_an_editor(bot, user_id, resolve_council_id())
         if not is_editor:
             return
@@ -75,7 +73,6 @@ def register_review_handlers(bot):
             return
 
         case_id = int(parts[1])
-        log.info(f"[REVIEW] Пользователь {user_id} добавляет аргумент к пересмотру дела #{case_id}")
         appeal = appealManager.get_appeal(case_id)
         if not appeal or appeal.get("status") != 'reviewing':
             bot.reply_to(message, f"Дело #{case_id} не найдено или сейчас не находится на стадии пересмотра.")
@@ -83,10 +80,8 @@ def register_review_handlers(bot):
 
         data = {"case_id": case_id}
         appealManager.set_user_state(user_id, ReviewStates["WAITING_ARG"], data)
-        log.info(f"[REVIEW] Установлено состояние {ReviewStates['WAITING_ARG']} для user_id: {user_id}, case_id: {case_id}")
         bot.send_message(message.chat.id, f"Изложите ваши новые аргументы или доказательства по делу №{case_id}, которые не были учтены в первом вердикте.")
 
-    # ... (остальной код FSM без изменений) ...
     @bot.message_handler(
         func=lambda message: (
                 appealManager.get_user_state(message.from_user.id) is not None and

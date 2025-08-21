@@ -12,11 +12,9 @@ from .council_helpers import resolve_council_id
 log = logging.getLogger("hjr-bot.admin_flow")
 
 last_sync_time = None
-# Для нового режима /getid
 admin_states = {"scanning_user_id": None}
 
 def sync_editors_list(bot):
-    # ... (код без изменений) ...
     """
     Получает список администраторов из чата редакторов и обновляет БД.
     Возвращает (количество, сообщение об ошибке или None).
@@ -57,7 +55,6 @@ def sync_editors_list(bot):
 def register_admin_handlers(bot):
     @bot.message_handler(commands=['sync_editors'], chat_types=['private'])
     def sync_command(message):
-        # ... (код без изменений) ...
         user_id = message.from_user.id
 
         if not appealManager.is_user_an_editor(bot, user_id, resolve_council_id()):
@@ -81,7 +78,6 @@ def register_admin_handlers(bot):
             last_sync_time = datetime.now()
             bot.send_message(message.chat.id, f"Синхронизация завершена. В базу добавлено/обновлено {count} редакторов.")
 
-    # ИСПРАВЛЕНО: Новый интерактивный режим /getid
     @bot.message_handler(commands=['getid'], chat_types=['private'])
     def start_get_id_scan(message):
         user_id = message.from_user.id

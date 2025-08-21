@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import os
 import logging # ИСПРАВЛЕНО: Добавлен импорт logging
+import re # Импортируем для очистки тегов
 import google.generativeai as genai
 import appealManager
 from datetime import datetime
@@ -115,9 +116,7 @@ def get_verdict_from_gemini(appeal: dict, commit_hash: str, bot_version: str, lo
         print(f"[ОШИБКА] Gemini API: {e}")
         return f"Ошибка при обращении к ИИ-арбитру. Детали: {e}"
 
-
 def finalize_appeal(appeal_data: dict, bot, commit_hash: str, bot_version: str):
-    # ... (код до final_message_markdown без изменений) ...
     if not isinstance(appeal_data, dict) or 'case_id' not in appeal_data:
         print(f"[CRITICAL_ERROR] В finalize_appeal переданы некорректные данные. Тип данных: {type(appeal_data)}")
         return
@@ -182,9 +181,10 @@ def finalize_appeal(appeal_data: dict, bot, commit_hash: str, bot_version: str):
     applicant_chat_id = appeal_data.get('applicant_chat_id')
     appeals_channel_id = os.getenv('APPEALS_CHANNEL_ID')
 
-    # ИСПРАВЛЕНО: Убрана проверка на длину, теперь все вердикты идут в Telegraph
+    clean_verdict_markdown = re.sub(r'</?rules>', '', final_message_markdown)
+
     log.info(f"Публикую вердикт по делу #{case_id} в Telegraph...")
-    final_message_html = markdown_to_html(final_message_markdown)
+    final_message_html = markdown_to_html(clean_verdict_markdown)
     page_url = post_to_telegraph(f"Вердикт по апелляции №{case_id}", final_message_html)
 
     if page_url:
@@ -193,8 +193,7 @@ def finalize_appeal(appeal_data: dict, bot, commit_hash: str, bot_version: str):
             f"Ознакомиться с полным решением можно по ссылке:\n{page_url}"
         )
     else:
-        # Запасной вариант, если Telegraph не сработал
-        message_to_send = final_message_markdown[:4000] + "\n\n_[Сообщение было урезано из-за ошибки публикации]_"
+        message_to_send = clean_verdict_markdown[:4000] + "\n\n_[Сообщение было урезано из-за ошибки публикации]_"
 
     try:
         if applicant_chat_id:
@@ -208,19 +207,3 @@ def finalize_appeal(appeal_data: dict, bot, commit_hash: str, bot_version: str):
     appealManager.update_appeal(case_id, "status", "closed")
     appealManager.log_interaction("SYSTEM", "appeal_closed", case_id)
     print(f"[FINALIZE] Дело #{case_id} успешно закрыто.")
-
-# ИСПРАВЛЕНО: Новая функция для пересмотра
-def finalize_review(appeal_data: dict, bot, commit_hash: str, bot_version: str):
-    case_id = appeal_data['case_id']
-    print(f"[FINALIZE_REVIEW] Начинаю ПЕРЕСМОТР дела #{case_id}")
-
-    log_id = appealManager.log_interaction("SYSTEM", "review_finalize_start", case_id)
-
-    # Формируем новый, сложный промпт
-    # ... (логика аналогична get_verdict_from_gemini, но с добавлением новых данных)
-
-    # ai_review_verdict = get_review_from_gemini(...)
-    # ... (далее логика отправки и закрытия дела со статусом closed_after_review)
-
-    # TODO: Полная реализация логики промпта и отправки для пересмотра
-    print(f"Функционал finalize_review для дела #{case_id} еще не реализован до конца.")

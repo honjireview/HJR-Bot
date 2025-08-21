@@ -14,7 +14,6 @@ def register_all_handlers(bot):
     user_states = {}
 
     @bot.message_handler(commands=['help'])
-    # ... (код без изменений) ...
     def send_help_text(message):
         help_text = """
 Здравствуйте! Я бот-ассистент проекта Honji Review. Моя задача — помогать с рутинными процессами и обеспечивать справедливость при помощи ИИ.
@@ -48,12 +47,7 @@ TextCrafter (Создание постов)
 """
         bot.send_message(message.chat.id, help_text, disable_web_page_preview=True)
 
-    # ИСПРАВЛЕНО: Удален старый обработчик /getid, который конфликтовал с новым
-    # @bot.message_handler(commands=['getid'])
-    # def send_chat_id(message): ...
-
     @bot.message_handler(commands=['cancel'], chat_types=['private'])
-    # ... (код без изменений) ...
     def cancel_any_process(message):
         user_id = message.from_user.id
         state = appealManager.get_user_state(user_id)
