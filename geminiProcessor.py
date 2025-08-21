@@ -6,8 +6,9 @@ from datetime import datetime
 from precedents import PRECEDENTS
 from handlers.telegraph_helpers import post_to_telegraph, markdown_to_html
 
-GEMINI_MODEL_NAME = "models/gemini-1.5-pro-latest"
 # ... (код до finalize_appeal без изменений) ...
+GEMINI_MODEL_NAME = "models/gemini-1.5-pro-latest"
+
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 gemini_model = None
 
@@ -29,7 +30,6 @@ def _read_file(filename: str, error_message: str) -> str:
         return error_message
 
 def get_verdict_from_gemini(appeal: dict, commit_hash: str, bot_version: str, log_id: int):
-    # ... (код без изменений) ...
     if not appeal:
         return "Ошибка: Не удалось найти данные по делу."
 
@@ -114,7 +114,7 @@ def get_verdict_from_gemini(appeal: dict, commit_hash: str, bot_version: str, lo
 
 
 def finalize_appeal(appeal_data: dict, bot, commit_hash: str, bot_version: str):
-    # ... (код без изменений) ...
+    # ... (код до final_message_markdown без изменений) ...
     if not isinstance(appeal_data, dict) or 'case_id' not in appeal_data:
         print(f"[CRITICAL_ERROR] В finalize_appeal переданы некорректные данные. Тип данных: {type(appeal_data)}")
         return
@@ -179,22 +179,19 @@ def finalize_appeal(appeal_data: dict, bot, commit_hash: str, bot_version: str):
     applicant_chat_id = appeal_data.get('applicant_chat_id')
     appeals_channel_id = os.getenv('APPEALS_CHANNEL_ID')
 
-    message_to_send = ""
-    if len(final_message_markdown) > 4096:
-        print(f"Сообщение по делу #{case_id} слишком длинное ({len(final_message_markdown)} симв.). Публикую в Telegraph.")
-        final_message_html = markdown_to_html(final_message_markdown)
-        page_url = post_to_telegraph(f"Вердикт по апелляции №{case_id}", final_message_html)
+    # ИСПРАВЛЕНО: Убрана проверка на длину, теперь все вердикты идут в Telegraph
+    log.info(f"Публикую вердикт по делу #{case_id} в Telegraph...")
+    final_message_html = markdown_to_html(final_message_markdown)
+    page_url = post_to_telegraph(f"Вердикт по апелляции №{case_id}", final_message_html)
 
-        if page_url:
-            message_to_send = (
-                f"⚖️ *Вердикт по апелляции №{case_id} готов.*\n\n"
-                f"Текст вердикта слишком объемный для одного сообщения. "
-                f"Ознакомиться с полным решением можно по ссылке:\n{page_url}"
-            )
-        else:
-            message_to_send = final_message_markdown[:4000] + "\n\n_[Сообщение было урезано из-за превышения лимита Telegram]_"
+    if page_url:
+        message_to_send = (
+            f"⚖️ *Вердикт по апелляции №{case_id} готов.*\n\n"
+            f"Ознакомиться с полным решением можно по ссылке:\n{page_url}"
+        )
     else:
-        message_to_send = final_message_markdown
+        # Запасной вариант, если Telegraph не сработал
+        message_to_send = final_message_markdown[:4000] + "\n\n_[Сообщение было урезано из-за ошибки публикации]_"
 
     try:
         if applicant_chat_id:
@@ -202,13 +199,12 @@ def finalize_appeal(appeal_data: dict, bot, commit_hash: str, bot_version: str):
         if appeals_channel_id:
             bot.send_message(appeals_channel_id, message_to_send, parse_mode="Markdown")
     except Exception as e:
-        print(f"[ОШИБКА] Не удалось отправить вердикт по делу #{case_id}: {e}")
+        log.error(f"[ОШИБКА] Не удалось отправить вердикт по делу #{case_id}: {e}")
         appealManager.log_interaction("SYSTEM", "send_verdict_error", case_id, str(e))
 
     appealManager.update_appeal(case_id, "status", "closed")
     appealManager.log_interaction("SYSTEM", "appeal_closed", case_id)
     print(f"[FINALIZE] Дело #{case_id} успешно закрыто.")
-
 
 # ИСПРАВЛЕНО: Новая функция для пересмотра
 def finalize_review(appeal_data: dict, bot, commit_hash: str, bot_version: str):

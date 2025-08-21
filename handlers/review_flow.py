@@ -2,7 +2,6 @@
 import logging
 from datetime import datetime, timedelta
 import appealManager
-# ИСПРАВЛЕНО: Импортируем хелпер для ссылок, а не весь applicant_flow
 from .telegram_helpers import validate_appeal_link
 from .council_helpers import resolve_council_id
 
@@ -22,9 +21,14 @@ def register_review_handlers(bot):
     def handle_recase(message):
         user_id = message.from_user.id
         log.info(f"[REVIEW] Команда /recase от user_id: {user_id}")
+
+        # ИСПРАВЛЕНО: Проверка на тип чата
+        if message.chat.type != 'private':
+            bot.reply_to(message, "Эту команду можно использовать только в личном чате с ботом.")
+            return
+
         is_editor = appealManager.is_user_an_editor(bot, user_id, resolve_council_id())
         if not is_editor:
-            log.warning(f"[REVIEW] User {user_id} не является редактором. Отказано в доступе.")
             return
 
         parts = message.text.split()
@@ -37,15 +41,12 @@ def register_review_handlers(bot):
         appeal = appealManager.get_appeal(case_id)
 
         if not appeal:
-            log.warning(f"[REVIEW] Дело #{case_id} не найдено в базе данных.")
             bot.reply_to(message, f"Дело #{case_id} не найдено.")
             return
         if appeal.get("status") != 'closed':
-            log.warning(f"[REVIEW] Попытка пересмотра дела #{case_id} с неверным статусом: {appeal.get('status')}")
             bot.reply_to(message, f"Пересмотр возможен только для дел со статусом 'closed'. Статус этого дела: '{appeal.get('status')}'.")
             return
         if appeal.get("is_reviewed"):
-            log.warning(f"[REVIEW] Попытка повторного пересмотра дела #{case_id}.")
             bot.reply_to(message, "Это дело уже было пересмотрено, повторный пересмотр невозможен.")
             return
 
@@ -58,6 +59,12 @@ def register_review_handlers(bot):
     def handle_reply_recase(message):
         user_id = message.from_user.id
         log.info(f"[REVIEW] Команда /replyrecase от user_id: {user_id}")
+
+        # ИСПРАВЛЕНО: Проверка на тип чата
+        if message.chat.type != 'private':
+            bot.reply_to(message, "Эту команду можно использовать только в личном чате с ботом.")
+            return
+
         is_editor = appealManager.is_user_an_editor(bot, user_id, resolve_council_id())
         if not is_editor:
             return
@@ -71,7 +78,6 @@ def register_review_handlers(bot):
         log.info(f"[REVIEW] Пользователь {user_id} добавляет аргумент к пересмотру дела #{case_id}")
         appeal = appealManager.get_appeal(case_id)
         if not appeal or appeal.get("status") != 'reviewing':
-            log.warning(f"[REVIEW] Пользователь {user_id} попытался добавить аргумент к делу #{case_id}, которое не на стадии пересмотра.")
             bot.reply_to(message, f"Дело #{case_id} не найдено или сейчас не находится на стадии пересмотра.")
             return
 
@@ -80,6 +86,7 @@ def register_review_handlers(bot):
         log.info(f"[REVIEW] Установлено состояние {ReviewStates['WAITING_ARG']} для user_id: {user_id}, case_id: {case_id}")
         bot.send_message(message.chat.id, f"Изложите ваши новые аргументы или доказательства по делу №{case_id}, которые не были учтены в первом вердикте.")
 
+    # ... (остальной код файла без изменений) ...
     @bot.message_handler(
         func=lambda message: (
                 appealManager.get_user_state(message.from_user.id) is not None and

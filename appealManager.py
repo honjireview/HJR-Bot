@@ -28,12 +28,13 @@ def find_similar_appeal(decision_text: str, similarity_threshold=90):
     try:
         conn = _get_conn()
         with conn.cursor() as cur:
+            # ИСПРАВЛЕНО: Поиск теперь идет по всем делам, а не только закрытым
             cur.execute("SELECT case_id, decision_text FROM appeals")
             records = cur.fetchall()
 
             for record in records:
                 case_id, db_text = record
-                if not db_text: continue # Пропускаем, если текст пустой
+                if not db_text: continue
                 similarity = fuzz.ratio(decision_text, db_text)
                 if similarity >= similarity_threshold:
                     log.info(f"Найдена похожая апелляция: #{case_id} (схожесть: {similarity}%)")
@@ -41,6 +42,7 @@ def find_similar_appeal(decision_text: str, similarity_threshold=90):
     except Exception as e:
         log.error(f"[ОШИБКА] Не удалось найти похожие апелляции: {e}")
     return None
+
 
 # ... (остальной код файла без изменений) ...
 def _get_conn():
