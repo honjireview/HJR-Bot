@@ -40,7 +40,7 @@ def _create_and_migrate_tables(conn: psycopg.Connection):
                         );
                     """)
 
-        # Таблица для состояний (FSM)
+        # Таблица состояний (FSM)
         cur.execute("""
                     CREATE TABLE IF NOT EXISTS user_states (
                                                                user_id TEXT PRIMARY KEY,
@@ -50,17 +50,21 @@ def _create_and_migrate_tables(conn: psycopg.Connection):
                         );
                     """)
 
-        # ИСПРАВЛЕНО: Миграция для изменения типа колонки в существующей таблице
-        # Это исправит ошибку 'invalid input syntax for type bigint'
+        # Таблица редакторов
+        cur.execute("""
+                    CREATE TABLE IF NOT EXISTS editors (
+                                                           user_id BIGINT PRIMARY KEY,
+                                                           username TEXT,
+                                                           first_name TEXT
+                    );
+                    """)
+
+        # Миграция: Добавляем колонку статуса неактивности
         try:
-            cur.execute("ALTER TABLE user_states ALTER COLUMN user_id TYPE TEXT;")
-            print("Миграция: Тип колонки user_states.user_id успешно изменен на TEXT.")
-        except psycopg.errors.DatatypeMismatch:
-            # Ошибка означает, что тип уже правильный, все в порядке
-            pass
+            cur.execute("ALTER TABLE editors ADD COLUMN IF NOT EXISTS is_inactive BOOLEAN DEFAULT FALSE;")
+            print("Миграция: Колонка 'is_inactive' успешно добавлена в таблицу 'editors'.")
         except Exception as e:
-            # Игнорируем другие возможные ошибки, если колонка уже существует и используется
-            print(f"Информация при миграции user_states: {e}")
+            print(f"Информация при миграции 'editors': {e}")
             conn.rollback() # Откатываем транзакцию в случае ошибки, чтобы продолжить
             pass
 

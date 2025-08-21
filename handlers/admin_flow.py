@@ -78,6 +78,33 @@ def register_admin_handlers(bot):
             last_sync_time = datetime.now()
             bot.send_message(message.chat.id, f"Синхронизация завершена. В базу добавлено/обновлено {count} редакторов.")
 
+    @bot.message_handler(commands=['setstatus'])
+    def set_status_command(message):
+        # Ограничиваем доступ только для вас (замените на ваш ID)
+        if message.from_user.id != 1991732112:
+            return
+
+        parts = message.text.split()
+        if len(parts) != 3 or not parts[1].startswith('@') or parts[2] not in ['active', 'inactive']:
+            bot.reply_to(message, "Неверный формат. Используйте: `/setstatus @username [active/inactive]`")
+            return
+
+        username = parts[1][1:] # Убираем @
+        status_str = parts[2]
+
+        editor = appealManager.find_editor_by_username(username)
+        if not editor:
+            bot.reply_to(message, f"Редактор с юзернеймом @{username} не найден в базе данных.")
+            return
+
+        user_id = editor['user_id']
+        is_inactive = (status_str == 'inactive')
+
+        if appealManager.update_editor_status(user_id, is_inactive):
+            bot.reply_to(message, f"Статус для @{username} успешно изменен на '{status_str}'.")
+        else:
+            bot.reply_to(message, "Произошла ошибка при обновлении статуса.")
+
     @bot.message_handler(commands=['getid'], chat_types=['private'])
     def start_get_id_scan(message):
         user_id = message.from_user.id

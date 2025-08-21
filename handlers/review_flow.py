@@ -115,14 +115,25 @@ def register_review_handlers(bot):
             bot.reply_to(message, f"Текст опроса не соответствует делу №{case_id} или не содержит слова 'пересмотр'.")
             return
 
+        council_id = resolve_council_id()
+        total_members = bot.get_chat_member_count(council_id) - 1
+        inactive_members = appealManager.count_inactive_editors()
+        active_members = total_members - inactive_members
+        threshold = active_members / 2
+
+        log.debug(f"[REVIEW_FSM] Проверка большинства: Всего={total_members}, Неактивных={inactive_members}, Активных={active_members}, Порог={threshold}")
+
         options = poll_data.get("options", [])
         for_votes = 0
         for opt in options:
             if "за" in opt.get("text", "").lower():
                 for_votes = opt.get("voter_count", 0)
 
-        if for_votes <= (poll_data.get("total_voter_count", 0) / 2):
-            bot.reply_to(message, "Решение о пересмотре не было принято большинством голосов.")
+        log.debug(f"[REVIEW_FSM] Результаты голосования: {for_votes} 'За'.")
+
+        if for_votes <= threshold:
+            log.warning(f"[REVIEW_FSM] Голосование по делу #{case_id} не набрало большинства ({for_votes} <= {threshold}).")
+            bot.reply_to(message, f"Решение о пересмотре не было принято абсолютным большинством голосов активных редакторов (необходимо >{int(threshold)}). Операция отменена.")
             appealManager.delete_user_state(chat_id_key)
             return
 
