@@ -7,3 +7,4 @@ gunicorn
 python-dotenv
 thefuzz
 telegraph
+Markdown
