@@ -8,7 +8,6 @@ from telebot import apihelper
 db_conn = None
 
 def _normalize_dsn(dsn: str) -> str:
-    # ... (код без изменений) ...
     if not dsn: return dsn
     if dsn.startswith("postgres://"):
         return dsn.replace("postgres://", "postgresql://", 1)
@@ -19,6 +18,7 @@ def _create_and_migrate_tables(conn: psycopg.Connection):
     Создаёт и/или обновляет таблицы в базе данных до актуальной схемы.
     """
     with conn.cursor() as cur:
+        # Основная таблица
         cur.execute("""
                     CREATE TABLE IF NOT EXISTS appeals (
                                                            case_id INTEGER PRIMARY KEY,
@@ -36,20 +36,18 @@ def _create_and_migrate_tables(conn: psycopg.Connection):
                     );
                     """)
 
+        # Миграции: Добавляем недостающие колонки, если их нет
         cur.execute("ALTER TABLE appeals ADD COLUMN IF NOT EXISTS message_thread_id INTEGER;")
-
-        # ИСПРАВЛЕНО: Убрана колонка, которую мы не можем получить
-        # cur.execute("ALTER TABLE appeals ADD COLUMN IF NOT EXISTS discussion_context TEXT;")
-
-        # ИСПРАВЛЕНО: Новые колонки для системы пересмотра
         cur.execute("ALTER TABLE appeals ADD COLUMN IF NOT EXISTS is_reviewed BOOLEAN DEFAULT FALSE;")
         cur.execute("ALTER TABLE appeals ADD COLUMN IF NOT EXISTS review_data JSONB;")
+        # ИСПРАВЛЕНО: Добавляем колонки для хеша коммита и ID вердикта
+        cur.execute("ALTER TABLE appeals ADD COLUMN IF NOT EXISTS commit_hash VARCHAR(40);")
+        cur.execute("ALTER TABLE appeals ADD COLUMN IF NOT EXISTS verdict_log_id INTEGER;")
 
     conn.commit()
     print("Проверка и миграция таблицы 'appeals' завершена.")
 
 def check_db_connection() -> bool:
-    # ... (остальной код без изменений) ...
     """
     Устанавливает соединение с PostgreSQL и проверяет структуру таблицы.
     """
@@ -59,10 +57,9 @@ def check_db_connection() -> bool:
         print("[ОШИБКА] PostgreSQL: Не найдена переменная окружения DATABASE_URL.")
         return False
     try:
-        # Устанавливаем соединение с автокоммитом false для миграций
         db_conn = psycopg.connect(dsn, autocommit=False)
         _create_and_migrate_tables(db_conn)
-        db_conn.autocommit = True # Возвращаем автокоммит для обычной работы
+        db_conn.autocommit = True
         print("[OK] PostgreSQL: Соединение установлено и таблица проверена.")
         return True
     except Exception as e:

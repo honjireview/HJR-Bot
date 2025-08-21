@@ -132,7 +132,10 @@ def finalize_appeal(appeal_data: dict, bot, commit_hash: str, bot_version: str):
     log_id = appealManager.log_interaction("SYSTEM", "finalize_start", case_id)
 
     ai_verdict_text = get_verdict_from_gemini(appeal_data, commit_hash, bot_version, log_id)
+
     appealManager.update_appeal(case_id, "ai_verdict", ai_verdict_text)
+    appealManager.update_appeal(case_id, "commit_hash", commit_hash)
+    appealManager.update_appeal(case_id, "verdict_log_id", log_id)
 
     created_at_dt = appeal_data.get('created_at')
     date_submitted = created_at_dt.strftime('%Y-%m-%d %H:%M UTC') if isinstance(created_at_dt, datetime) else "Неизвестно"
@@ -207,7 +210,6 @@ def finalize_appeal(appeal_data: dict, bot, commit_hash: str, bot_version: str):
     appealManager.log_interaction("SYSTEM", "appeal_closed", case_id)
     log.info(f"[FINALIZE] Дело #{case_id} успешно закрыто.")
 
-# ИСПРАВЛЕНО: Добавлена полная реализация функции пересмотра
 def get_review_from_gemini(appeal: dict, commit_hash: str, bot_version: str, log_id: int):
     """
     Формирует усложненный промпт для ПЕРЕСМОТРА дела и получает финальный вердикт.
@@ -215,7 +217,6 @@ def get_review_from_gemini(appeal: dict, commit_hash: str, bot_version: str, log
     case_id = appeal.get('case_id')
     project_rules = _read_file('rules.txt', "Устав проекта не найден.")
 
-    # Формируем текст новых аргументов
     review_data = appeal.get('review_data', {})
     new_arguments_list = review_data.get('new_arguments', [])
     new_arguments_text = ""
@@ -225,12 +226,10 @@ def get_review_from_gemini(appeal: dict, commit_hash: str, bot_version: str, log
     else:
         new_arguments_text = "Новых аргументов для пересмотра предоставлено не было."
 
-    # Формируем информацию о голосовании за пересмотр
     poll_data = review_data.get("poll", {})
     poll_text = f"Вопрос: '{poll_data.get('question', '')}', Результаты: "
     poll_text += ", ".join([f"'{opt.get('text')}': {opt.get('voter_count')} гол." for opt in poll_data.get('options', [])])
 
-    # Новый, усложненный промпт
     prompt = f"""
 Ты — ИИ-арбитр высшей инстанции. Перед тобой дело №{case_id}, по которому уже был вынесен вердикт.
 Совет Редакторов провел голосование ({poll_text}) и решил пересмотреть это дело.
@@ -250,7 +249,7 @@ def get_review_from_gemini(appeal: dict, commit_hash: str, bot_version: str, log
 
 **ПРЕДЫДУЩИЙ ВЕРДИКТ:**
     {appeal.get('ai_verdict', 'Предыдущий вердикт не найден.')}
-    
+
 **НОВЫЕ АРГУМЕНТЫ ДЛЯ ПЕРЕСМОТРА:**
 {new_arguments_text}
 """
@@ -272,15 +271,15 @@ def finalize_review(appeal_data: dict, bot, commit_hash: str, bot_version: str):
 
     log_id = appealManager.log_interaction("SYSTEM", "review_finalize_start", case_id)
 
-    # Получаем финальный вердикт
     ai_review_verdict = get_review_from_gemini(appeal_data, commit_hash, bot_version, log_id)
 
-    # Сохраняем финальный вердикт в review_data, чтобы не затереть старый
     review_data = appeal_data.get('review_data', {})
     review_data['final_verdict'] = ai_review_verdict
     appealManager.update_appeal(case_id, "review_data", review_data)
 
-    # Формируем и отправляем сообщение
+    appealManager.update_appeal(case_id, "commit_hash", commit_hash)
+    appealManager.update_appeal(case_id, "verdict_log_id", log_id)
+
     final_verdict_text = (
         f"⚖️ *Финальные итоги рассмотрения апелляции №{case_id} (ПОСЛЕ ПЕРЕСМОТРА)*\n\n"
         f"**ID Финального Вердикта:** `{log_id}`\n"
@@ -294,7 +293,6 @@ def finalize_review(appeal_data: dict, bot, commit_hash: str, bot_version: str):
     appeals_channel_id = os.getenv('APPEALS_CHANNEL_ID')
 
     try:
-        # Логика отправки через Telegraph
         log.info(f"Публикую вердикт по ПЕРЕСМОТРУ дела #{case_id} в Telegraph...")
         final_message_html = markdown_to_html(final_verdict_text)
         page_url = post_to_telegraph(f"Финальный вердикт по апелляции №{case_id} (Пересмотр)", final_message_html)
