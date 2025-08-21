@@ -119,7 +119,6 @@ def delete_appeal(case_id):
         log.error(f"[ОШИБКА] Не удалось удалить дело #{case_id}: {e}")
 
 def get_appeals_in_collection():
-    """Возвращает все апелляции, которые сейчас в стадии сбора контраргументов."""
     try:
         conn = _get_conn()
         with conn.cursor() as cur:
@@ -146,7 +145,6 @@ def get_active_appeal_by_user(user_id):
         log.error(f"[ОШИБКА] Не удалось проверить активные апелляции для user_id {user_id}: {e}")
     return None
 
-# ИСПРАВЛЕНО: Функция теперь работает с текстовыми ID
 def get_user_state(user_id):
     """Получает состояние по ID (может быть int для юзера или str для чата)."""
     try:
@@ -160,7 +158,6 @@ def get_user_state(user_id):
         log.error(f"[ОШИБКА] Не удалось получить состояние для user_id {user_id}: {e}")
     return None
 
-# ИСПРАВЛЕНО: Функция теперь работает с текстовыми ID
 def set_user_state(user_id, state, data=None):
     """Устанавливает состояние по ID (может быть int для юзера или str для чата)."""
     try:
@@ -181,6 +178,7 @@ def set_user_state(user_id, state, data=None):
         log.error(f"[ОШИБКА] Не удалось установить состояние для user_id {user_id}: {e}")
 
 def delete_user_state(user_id):
+    """Удаляет состояние по ID (может быть int для юзера или str для чата)."""
     try:
         conn = _get_conn()
         with conn.cursor() as cur:

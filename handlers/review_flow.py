@@ -7,9 +7,7 @@ from .council_helpers import resolve_council_id
 
 log = logging.getLogger("hjr-bot.review_flow")
 
-# Состояние теперь будет привязано к ID чата, а не пользователя
 REVIEW_STATE_WAITING_POLL = "review_state_waiting_poll_for_chat"
-# Это состояние для ЛС, как и раньше
 REVIEW_STATE_WAITING_ARG = "review_state_waiting_arg_for_user"
 
 def register_review_handlers(bot):
@@ -50,13 +48,11 @@ def register_review_handlers(bot):
             bot.reply_to(message, "Это дело уже было пересмотрено.")
             return
 
-        # Устанавливаем состояние для ЧАТА, чтобы бот ждал ссылку именно здесь
         chat_state_key = f"chat_{message.chat.id}"
         data = {"case_id": case_id, "initiator_id": user_id}
         appealManager.set_user_state(chat_state_key, REVIEW_STATE_WAITING_POLL, data)
         log.info(f"[REVIEW] Установлено состояние {REVIEW_STATE_WAITING_POLL} для чата: {message.chat.id}")
 
-        # Бот отвечает в группе
         bot.reply_to(message, f"Инициирован пересмотр дела №{case_id}. Ожидаю ссылку на закрытое голосование Совета по этому вопросу.")
 
     @bot.message_handler(commands=['replyrecase'])
@@ -83,10 +79,8 @@ def register_review_handlers(bot):
 
         data = {"case_id": case_id}
         appealManager.set_user_state(user_id, REVIEW_STATE_WAITING_ARG, data)
-        log.info(f"[REVIEW] Установлено состояние {REVIEW_STATE_WAITING_ARG} для user_id: {user_id}, case_id: {case_id}")
         bot.send_message(message.chat.id, f"Изложите ваши новые аргументы по делу №{case_id}.")
 
-    # Новый обработчик, который "слушает" ссылки ТОЛЬКО в чате, где была вызвана /recase
     @bot.message_handler(
         func=lambda message: (
                 message.chat.type in ['group', 'supergroup'] and
@@ -149,7 +143,6 @@ def register_review_handlers(bot):
         bot.send_message(message.chat.id, f"📣 Члены Совета могут предоставить аргументы через команду `/replyrecase {case_id}` в личном чате с ботом.", message_thread_id=thread_id)
         appealManager.delete_user_state(chat_id_key)
 
-    # Обработчик для сбора аргументов в ЛС
     @bot.message_handler(
         func=lambda message: (
                 appealManager.get_user_state(message.from_user.id) is not None and

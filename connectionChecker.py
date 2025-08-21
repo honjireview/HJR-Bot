@@ -18,7 +18,6 @@ def _create_and_migrate_tables(conn: psycopg.Connection):
     Создаёт и/или обновляет таблицы в базе данных до актуальной схемы.
     """
     with conn.cursor() as cur:
-        # Основная таблица апелляций
         cur.execute("""
                     CREATE TABLE IF NOT EXISTS appeals (
                                                            case_id INTEGER PRIMARY KEY,
@@ -40,8 +39,8 @@ def _create_and_migrate_tables(conn: psycopg.Connection):
                         );
                     """)
 
-        # Таблица для состояний (FSM)
-        # ИСПРАВЛЕНО: user_id теперь TEXT, чтобы хранить и int, и str
+        # ИСПРАВЛЕНО: Таблица состояний теперь использует TEXT для user_id,
+        # чтобы хранить и ID пользователей, и ID чатов.
         cur.execute("""
                     CREATE TABLE IF NOT EXISTS user_states (
                                                                user_id TEXT PRIMARY KEY,
