@@ -7,11 +7,10 @@ from .council_helpers import resolve_council_id
 
 log = logging.getLogger("hjr-bot.review_flow")
 
-REVIEW_STATE_PREFIX = "review_"
-ReviewStates = {
-    "WAITING_POLL": f"{REVIEW_STATE_PREFIX}waiting_poll",
-    "WAITING_ARG": f"{REVIEW_STATE_PREFIX}waiting_arg",
-}
+# Состояние теперь будет привязано к ID чата, а не пользователя
+REVIEW_STATE_WAITING_POLL = "review_state_waiting_poll_for_chat"
+# Это состояние для ЛС, как и раньше
+REVIEW_STATE_WAITING_ARG = "review_state_waiting_arg_for_user"
 
 def register_review_handlers(bot):
     """
@@ -19,6 +18,7 @@ def register_review_handlers(bot):
     """
     @bot.message_handler(commands=['recase'])
     def handle_recase(message):
+        # Эта команда теперь работает только в группе Совета
         if message.chat.type not in ['group', 'supergroup']:
             bot.reply_to(message, "Эту команду можно использовать только в чате Совета.")
             return
@@ -51,14 +51,18 @@ def register_review_handlers(bot):
             bot.reply_to(message, "Это дело уже было пересмотрено.")
             return
 
+        # Устанавливаем состояние для ЧАТА, чтобы бот ждал ссылку именно здесь
+        chat_state_key = f"chat_{message.chat.id}"
         data = {"case_id": case_id, "initiator_id": user_id}
-        # Устанавливаем состояние для ЧАТА, а не для пользователя
-        appealManager.set_user_state(f"chat_{message.chat.id}", ReviewStates["WAITING_POLL"], data)
-        log.info(f"[REVIEW] Установлено состояние {ReviewStates['WAITING_POLL']} для чата: {message.chat.id}, case_id: {case_id}")
+        appealManager.set_user_state(chat_state_key, REVIEW_STATE_WAITING_POLL, data)
+        log.info(f"[REVIEW] Установлено состояние {REVIEW_STATE_WAITING_POLL} для чата: {message.chat.id}")
+
+        # Бот отвечает в группе
         bot.reply_to(message, f"Инициирован пересмотр дела №{case_id}. Ожидаю ссылку на закрытое голосование Совета по этому вопросу.")
 
     @bot.message_handler(commands=['replyrecase'])
     def handle_reply_recase(message):
+        # Эта команда по-прежнему работает только в ЛС
         if message.chat.type != 'private':
             bot.reply_to(message, "Эту команду можно использовать только в личном чате с ботом.")
             return
@@ -80,16 +84,14 @@ def register_review_handlers(bot):
             return
 
         data = {"case_id": case_id}
-        appealManager.set_user_state(user_id, ReviewStates["WAITING_ARG"], data)
-        log.info(f"[REVIEW] Установлено состояние {ReviewStates['WAITING_ARG']} для user_id: {user_id}, case_id: {case_id}")
+        appealManager.set_user_state(user_id, REVIEW_STATE_WAITING_ARG, data)
         bot.send_message(message.chat.id, f"Изложите ваши новые аргументы по делу №{case_id}.")
 
-    # ИСПРАВЛЕНО: Новый обработчик, который реагирует только на ссылки
+    # Новый обработчик, который "слушает" ссылки ТОЛЬКО в чате, где была вызвана /recase
     @bot.message_handler(
         func=lambda message: (
                 message.chat.type in ['group', 'supergroup'] and
                 appealManager.get_user_state(f"chat_{message.chat.id}") is not None and
-                str(appealManager.get_user_state(f"chat_{message.chat.id}").get('state', '')) == ReviewStates["WAITING_POLL"] and
                 "t.me/" in message.text
         ),
         content_types=['text']
@@ -97,8 +99,13 @@ def register_review_handlers(bot):
     def handle_review_poll_link(message):
         chat_id_key = f"chat_{message.chat.id}"
         state_data = appealManager.get_user_state(chat_id_key)
+
+        # Двойная проверка, что мы в правильном состоянии
+        if state_data.get("state") != REVIEW_STATE_WAITING_POLL:
+            return
+
         case_id = state_data.get("data", {}).get("case_id")
-        log.info(f"[REVIEW_FSM] Получена ссылка для пересмотра дела #{case_id} в чате {message.chat.id}")
+        log.info(f"[REVIEW_FSM] В чате {message.chat.id} получена ссылка для пересмотра дела #{case_id}")
 
         is_valid, result = validate_appeal_link(bot, message.text, user_chat_id=message.chat.id)
         if not is_valid:
@@ -124,7 +131,7 @@ def register_review_handlers(bot):
 
         if for_votes <= (poll_data.get("total_voter_count", 0) / 2):
             bot.reply_to(message, "Решение о пересмотре не было принято большинством голосов.")
-            appealManager.delete_user_state(chat_id_key)
+            appealManager.delete_user_state(chat_id_key) # Сбрасываем состояние чата
             return
 
         log.info(f"[REVIEW_FSM] Все проверки для пересмотра дела #{case_id} пройдены.")
@@ -137,17 +144,18 @@ def register_review_handlers(bot):
         expires_at = datetime.utcnow() + timedelta(hours=24)
         appealManager.update_appeal(case_id, "timer_expires_at", expires_at)
 
-        bot.reply_to(message, f"Голосование по делу №{case_id} принято. Начался 24-часовой сбор дополнительных аргументов от членов Совета.")
+        bot.reply_to(message, f"Голосование по делу №{case_id} принято. Начался 24-часовой сбор дополнительных аргументов.")
 
         appeal = appealManager.get_appeal(case_id)
         thread_id = appeal.get("message_thread_id")
         bot.send_message(message.chat.id, f"📣 Члены Совета могут предоставить аргументы через команду `/replyrecase {case_id}` в личном чате с ботом.", message_thread_id=thread_id)
         appealManager.delete_user_state(chat_id_key)
 
+    # Обработчик для сбора аргументов в ЛС
     @bot.message_handler(
         func=lambda message: (
                 appealManager.get_user_state(message.from_user.id) is not None and
-                str(appealManager.get_user_state(message.from_user.id).get('state', '')) == ReviewStates["WAITING_ARG"]
+                str(appealManager.get_user_state(message.from_user.id).get('state', '')) == REVIEW_STATE_WAITING_ARG
         ),
         content_types=['text']
     )
