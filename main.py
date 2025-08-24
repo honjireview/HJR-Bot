@@ -20,15 +20,15 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message
 log = logging.getLogger("hjr-bot")
 
 # --- Переменные окружения ---
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+HJRBOT_TELEGRAM_TOKEN = os.getenv("HJRBOT_TELEGRAM_TOKEN")
 WEBHOOK_BASE_URL = os.getenv("WEBHOOK_BASE_URL")
 COUNCIL_CHAT_ID = os.getenv("EDITORS_GROUP_ID") # Используем для stop_poll
 
-if not TELEGRAM_TOKEN:
-    raise RuntimeError("Не найден TELEGRAM_TOKEN в окружении.")
+if not HJRBOT_TELEGRAM_TOKEN:
+    raise RuntimeError("Не найден HJRBOT_TELEGRAM_TOKEN в окружении.")
 
 # --- Создание экземпляров ---
-bot = telebot.TeleBot(TELEGRAM_TOKEN)
+bot = telebot.TeleBot(HJRBOT_TELEGRAM_TOKEN)
 app = Flask(__name__)
 
 # --- Импорт модулей ---
@@ -41,7 +41,7 @@ from handlers.council_helpers import resolve_council_id
 register_all_handlers(bot)
 
 # --- Webhook route и Health Check ---
-@app.post(f"/webhook/{TELEGRAM_TOKEN}")
+@app.post(f"/webhook/{HJRBOT_TELEGRAM_TOKEN}")
 def telegram_webhook():
     if request.headers.get("content-type") == "application/json":
         update = telebot.types.Update.de_json(request.get_data(as_text=True))
@@ -68,7 +68,7 @@ def startup_and_timer_tasks():
     sync_editors_list(bot)
 
     if WEBHOOK_BASE_URL:
-        webhook_url = f"{WEBHOOK_BASE_URL.strip('/')}/webhook/{TELEGRAM_TOKEN}"
+        webhook_url = f"{WEBHOOK_BASE_URL.strip('/')}/webhook/{HJRBOT_TELEGRAM_TOKEN}"
         current_webhook = bot.get_webhook_info()
         if current_webhook.url != webhook_url:
             log.info(f"Установка webhook на: {webhook_url}")
