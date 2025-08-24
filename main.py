@@ -118,7 +118,7 @@ def startup_and_timer_tasks():
                     if poll_message_id and COUNCIL_CHAT_ID:
                         final_poll = bot.stop_poll(COUNCIL_CHAT_ID, poll_message_id)
 
-                        total_members = bot.get_chat_member_count(COUNCIL_CHAT_ID) - 1
+                        total_members = bot.get_chat_member_count(COUNCIL_CHAT_ID) - 1 # Вычитаем самого бота
                         inactive_members = appealManager.count_inactive_editors()
                         active_members = total_members - inactive_members
                         threshold = active_members / 2
