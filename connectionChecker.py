@@ -1,3 +1,4 @@
+# honjireview/hjr-bot/HJR-Bot-9aa44cfee942a8142d76d0d46064745fe48346ce/connectionChecker.py
 # -*- coding: utf-8 -*-
 
 import os
@@ -59,17 +60,24 @@ def _create_and_migrate_tables(conn: psycopg.Connection):
                     );
                     """)
 
-        # Миграция: Добавляем колонку статуса неактивности
+        # --- НАЧАЛО ИЗМЕНЕНИЙ: Миграция схемы таблицы editors ---
         try:
             cur.execute("ALTER TABLE editors ADD COLUMN IF NOT EXISTS is_inactive BOOLEAN DEFAULT FALSE;")
-            print("Миграция: Колонка 'is_inactive' успешно добавлена в таблицу 'editors'.")
-        except Exception as e:
-            print(f"Информация при миграции 'editors': {e}")
-            conn.rollback() # Откатываем транзакцию в случае ошибки, чтобы продолжить
-            pass
+            print("Миграция: Колонка 'is_inactive' успешно добавлена/проверена в 'editors'.")
+        except Exception:
+            conn.rollback()
+
+        try:
+            # Добавляем колонку role с ролью по умолчанию 'editor'
+            cur.execute("ALTER TABLE editors ADD COLUMN IF NOT EXISTS role TEXT DEFAULT 'editor';")
+            print("Миграция: Колонка 'role' успешно добавлена/проверена в 'editors'.")
+        except Exception:
+            conn.rollback()
+        # --- КОНЕЦ ИЗМЕНЕНИЙ ---
 
     conn.commit()
     print("Проверка и миграция таблиц завершена.")
+
 
 def check_db_connection() -> bool:
     """

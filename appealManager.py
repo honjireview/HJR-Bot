@@ -187,8 +187,10 @@ def delete_user_state(user_id):
     except Exception as e:
         log.error(f"[ОШИБКА] Не удалось удалить состояние для user_id {user_id}: {e}")
 
-def update_editor_list(editors):
-    """Полностью перезаписывает список редакторов в БД."""
+def update_editor_list(editors_with_roles):
+    """
+    Полностью перезаписывает список редакторов в БД, сохраняя их роли и статус неактивности.
+    """
     try:
         conn = _get_conn()
         with conn.cursor() as cur:
@@ -197,23 +199,36 @@ def update_editor_list(editors):
             existing_statuses = {row[0]: row[1] for row in cur.fetchall()}
 
             cur.execute("TRUNCATE TABLE editors;")
-            if not editors:
+            if not editors_with_roles:
                 log.warning("Список редакторов для обновления пуст.")
                 return
 
             editor_data = []
-            for editor in editors:
-                user_id = editor.user.id
-                is_inactive = existing_statuses.get(user_id, False) # Сохраняем старый статус
-                editor_data.append((user_id, editor.user.username, editor.user.first_name, is_inactive))
+            for editor_info in editors_with_roles:
+                user = editor_info['user']
+                role = editor_info['role']
+                user_id = user.id
 
-            with cur.copy("COPY editors (user_id, username, first_name, is_inactive) FROM STDIN") as copy:
+                # Сохраняем старый статус неактивности, если он был
+                is_inactive = existing_statuses.get(user_id, False)
+
+                editor_data.append((
+                    user_id,
+                    user.username,
+                    user.first_name,
+                    is_inactive,
+                    role  # Добавляем роль
+                ))
+
+            # Используем COPY для быстрой вставки
+            with cur.copy("COPY editors (user_id, username, first_name, is_inactive, role) FROM STDIN") as copy:
                 for record in editor_data:
                     copy.write_row(record)
+
         conn.commit()
-        log.info(f"Список редакторов обновлен. Загружено {len(editors)} пользователей.")
+        log.info(f"Список редакторов обновлен. Загружено {len(editors_with_roles)} пользователей.")
     except Exception as e:
-        log.error(f"[ОШИБКА] Не удалось обновить список редакторов: {e}")
+        log.error(f"[ОШИБКА] Не удалось обновить список редакторов: {e}", exc_info=True)
 
 def is_user_an_editor(bot, user_id, chat_id):
     """Проверяет, является ли пользователь участником указанного чата."""

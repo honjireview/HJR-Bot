@@ -1,3 +1,4 @@
+# honjireview/hjr-bot/HJR-Bot-9aa44cfee942a8142d76d0d46064745fe48346ce/handlers/admin_flow.py
 # -*- coding: utf-8 -*-
 """
 Обработчики для команд, связанных с управлением списком редакторов.
@@ -16,68 +17,78 @@ admin_states = {"scanning_user_id": None}
 
 def sync_editors_list(bot):
     """
-    Получает список администраторов из чата редакторов и обновляет БД.
+    Получает список администраторов из чата редакторов, определяет их роли и обновляет БД.
     Возвращает (количество, сообщение об ошибке или None).
     """
     log.info("--- [SYNC_EDITORS] Начало процесса синхронизации. ---")
-
     target_chat = resolve_council_id()
     if not target_chat:
         error_msg = "EDITORS_GROUP_ID не задан в переменных окружения."
         log.error(f"[SYNC_EDITORS] ПРОВАЛ: {error_msg}")
         return 0, error_msg
-
     log.info(f"[SYNC_EDITORS] Шаг 1: ID чата редакторов успешно определён: {target_chat}")
 
     try:
-        log.info(f"[SYNC_EDITORS] Шаг 2: Отправка запроса get_chat_administrators в Telegram API для чата {target_chat}...")
+        log.info(f"[SYNC_EDITORS] Шаг 2: Отправка запроса get_chat_administrators...")
         admins = bot.get_chat_administrators(target_chat)
-        log.info(f"[SYNC_EDITORS] Шаг 3: Ответ от API получен. Найдено всего администраторов: {len(admins)}.")
+        log.info(f"[SYNC_EDITORS] Шаг 3: Ответ от API получен. Найдено администраторов: {len(admins)}.")
 
-        editors = [admin for admin in admins if not admin.user.is_bot]
-        log.info(f"[SYNC_EDITORS] Шаг 4: Отфильтрованы боты. Осталось реальных пользователей (редакторов): {len(editors)}.")
+        editors_with_roles = []
+        for admin in admins:
+            if admin.user.is_bot:
+                continue
 
-        if not editors:
+            # Определяем роль. По умолчанию 'editor'
+            role = 'editor'
+            if admin.custom_title and admin.custom_title.lower() == 'исполнитель':
+                role = 'executor'
+                log.info(f"[SYNC_EDITORS] Обнаружен Исполнитель: {admin.user.username or admin.user.first_name}")
+
+            editors_with_roles.append({
+                "user": admin.user,
+                "role": role
+            })
+
+        log.info(f"[SYNC_EDITORS] Шаг 4: Отфильтрованы боты. Осталось редакторов: {len(editors_with_roles)}.")
+        if not editors_with_roles:
             error_msg = "В чате не найдено ни одного администратора-человека."
             log.warning(f"[SYNC_EDITORS] ПРОВАЛ: {error_msg}")
             return 0, error_msg
 
-        log.info(f"[SYNC_EDITORS] Шаг 5: Передача {len(editors)} редакторов в appealManager для записи в базу данных...")
-        appealManager.update_editor_list(editors)
+        log.info(f"[SYNC_EDITORS] Шаг 5: Передача {len(editors_with_roles)} редакторов в appealManager для записи в БД...")
+        appealManager.update_editor_list(editors_with_roles)
         log.info("--- [SYNC_EDITORS] УСПЕХ: Процесс синхронизации завершен. ---")
-        return len(editors), None
+        return len(editors_with_roles), None
 
     except Exception as e:
         error_msg = f"Произошла критическая ошибка при вызове Telegram API: {e}"
-        log.error(f"[SYNC_EDITORS] КРИТИЧЕСКАЯ ОШИБКА: {error_msg}")
+        log.error(f"[SYNC_EDITORS] КРИТИЧЕСКАЯ ОШИБКА: {error_msg}", exc_info=True)
         return 0, error_msg
+
 
 def register_admin_handlers(bot):
     @bot.message_handler(commands=['sync_editors'], chat_types=['private'])
     def sync_command(message):
         user_id = message.from_user.id
-
         if not appealManager.is_user_an_editor(bot, user_id, resolve_council_id()):
             return
 
         global last_sync_time
-
         if last_sync_time and datetime.now() < last_sync_time + timedelta(hours=2):
             remaining_time = (last_sync_time + timedelta(hours=2)) - datetime.now()
             minutes_left = round(remaining_time.total_seconds() / 60)
-            bot.reply_to(message, f"Эту команду можно использовать не чаще, чем раз в 2 часа. Пожалуйста, подождите еще примерно {minutes_left} минут.")
+            bot.reply_to(message, f"Эту команду можно использовать не чаще, чем раз в 2 часа. Подождите ~{minutes_left} минут.")
             return
 
         bot.reply_to(message, "Начинаю ручную синхронизацию списка редакторов...")
-
         count, error = sync_editors_list(bot)
-
         if error:
-            bot.send_message(message.chat.id, f"Во время синхронизации произошла ошибка: {error}")
+            bot.send_message(message.chat.id, f"Ошибка при синхронизации: {error}")
         else:
             last_sync_time = datetime.now()
             bot.send_message(message.chat.id, f"Синхронизация завершена. В базу добавлено/обновлено {count} редакторов.")
 
+    # ... (остальные обработчики без изменений)
     @bot.message_handler(commands=['setstatus'])
     def set_status_command(message):
         # Ограничиваем доступ только для вас (замените на ваш ID)
