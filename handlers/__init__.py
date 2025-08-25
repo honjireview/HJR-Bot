@@ -65,5 +65,6 @@ TextCrafter (Создание постов)
     applicant_flow.register_applicant_handlers(bot)
     council_flow.register_council_handlers(bot)
     review_flow.register_review_handlers(bot)
-    textcrafter_flow.register_textcrafter_handlers(bot, user_states)
+    # ИЗМЕНЕНО: убран аргумент user_states
+    textcrafter_flow.register_textcrafter_handlers(bot)
     admin_flow.register_admin_handlers(bot)
