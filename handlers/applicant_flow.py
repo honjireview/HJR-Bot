@@ -5,21 +5,22 @@ from datetime import datetime
 from telebot import types
 
 import appealManager
-# ИСПРАВЛЕНО: Убран импорт get_discussion_context
 from .telegram_helpers import validate_appeal_link
 from .council_helpers import request_counter_arguments, resolve_council_id
 
 log = logging.getLogger("hjr-bot.applicant_flow")
 CHARACTER_LIMIT = 4000
 
-# ... (остальной код до handle_fsm_messages без изменений) ...
+# ИСПРАВЛЕНО: Добавлен префикс для всех состояний, чтобы избежать конфликтов с другими FSM
+APPLICANT_STATE_PREFIX = "applicant_"
+
 class AppealStates:
-    WAITING_FOR_LINK = "waiting_for_link"
-    WAITING_VOTE_CONFIRM = "waiting_vote_confirm"
-    WAITING_MAIN_ARGUMENT = "waiting_main_argument"
-    WAITING_Q1 = "waiting_q1"
-    WAITING_Q2 = "waiting_q2"
-    WAITING_Q3 = "waiting_q3"
+    WAITING_FOR_LINK = f"{APPLICANT_STATE_PREFIX}waiting_for_link"
+    WAITING_VOTE_CONFIRM = f"{APPLICANT_STATE_PREFIX}waiting_vote_confirm"
+    WAITING_MAIN_ARGUMENT = f"{APPLICANT_STATE_PREFIX}waiting_main_argument"
+    WAITING_Q1 = f"{APPLICANT_STATE_PREFIX}waiting_q1"
+    WAITING_Q2 = f"{APPLICANT_STATE_PREFIX}waiting_q2"
+    WAITING_Q3 = f"{APPLICANT_STATE_PREFIX}waiting_q3"
 
 def _render_item_text(item: dict) -> str:
     if not item: return ""
@@ -77,9 +78,10 @@ def register_applicant_handlers(bot):
         bot.send_message(call.message.chat.id, "Пожалуйста, пришлите ссылку на сообщение или опрос, решение в котором вы хотите оспорить.\n\nДля отмены в любой момент введите /cancel")
 
     @bot.message_handler(
+        # ИСПРАВЛЕНО: Условие теперь проверяет конкретный префикс, а не просто наличие состояния
         func=lambda message: (
                 appealManager.get_user_state(message.from_user.id) is not None and
-                not str(appealManager.get_user_state(message.from_user.id).get('state', '')).startswith("council_") and
+                str(appealManager.get_user_state(message.from_user.id).get('state', '')).startswith(APPLICANT_STATE_PREFIX) and
                 message.chat.type == 'private'
         ),
         content_types=['text']
@@ -128,10 +130,6 @@ def register_applicant_handlers(bot):
                 "message_thread_id": content_data.get("thread_id")
             }
             appealManager.create_appeal(new_case_id, initial_appeal_data)
-
-            # ИСПРАВЛЕНО: Удален вызов неработающей функции
-            # discussion_context = get_discussion_context(...)
-            # appealManager.update_appeal(...)
 
             bot.send_message(message.chat.id, f"Ссылка принята. Вашему делу присвоен номер #{new_case_id}.")
 
