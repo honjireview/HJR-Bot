@@ -3,9 +3,7 @@
 
 # --- НАЧАЛО ИСПРАВЛЕНИЯ: Настройка пути для импортов ---
 # Это гарантирует, что Gunicorn сможет найти все ваши модули (core, app, utils)
-import sys
-import os
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+# Удалено: ручная правка sys.path больше не нужна, используем абсолютные импорты из пакета app
 # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
 
 import logging
@@ -15,9 +13,9 @@ from flask import Flask, request, abort
 import telebot
 
 # Теперь все абсолютные импорты будут работать корректно
-from core.config import BOT_TOKEN, WEBHOOK_BASE_URL, WEBHOOK_PATH, WEBHOOK_SECRET
-from core.bot import bot
-from core.db import check_all_connections
+from app.core.config import BOT_TOKEN, WEBHOOK_BASE_URL, WEBHOOK_PATH, WEBHOOK_SECRET
+from app.core.bot import bot
+from app.core.db import check_all_connections
 from app.handlers import register_all_handlers
 from app.services import timer_service, editor_service
 
