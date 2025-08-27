@@ -1,12 +1,9 @@
+# utils/telegram_helpers.py
 # -*- coding: utf-8 -*-
-"""
-Утилиты по работе с Telegram API.
-"""
 import logging
 from typing import Optional, Union, Dict, Any
-
 from .link_parser import parse_message_link
-from .council_helpers import is_link_from_council, resolve_council_id
+from app.services.editor_service import is_link_from_council, resolve_council_id
 
 log = logging.getLogger("hjr-bot.telegram_helpers")
 
