@@ -1,28 +1,37 @@
 # app/main.py
 # -*- coding: utf-8 -*-
+
+# --- НАЧАЛО ИСПРАВЛЕНИЯ: Настройка пути для импортов ---
+# Это гарантирует, что Gunicorn сможет найти все ваши модули (core, app, utils)
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+# --- КОНЕЦ ИСПРАВЛЕНИЯ ---
+
 import logging
 import time
 from threading import Thread
 from flask import Flask, request, abort
 import telebot
 
-# --- 1. Настройка и абсолютные импорты ---
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-log = logging.getLogger("hjr-bot.main")
-
+# Теперь все абсолютные импорты будут работать корректно
 from core.config import BOT_TOKEN, WEBHOOK_BASE_URL, WEBHOOK_PATH, WEBHOOK_SECRET
 from core.bot import bot
 from core.db import check_all_connections
 from app.handlers import register_all_handlers
 from app.services import timer_service, editor_service
 
-# --- 2. Инициализация Flask ---
+# Настройка логирования
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+log = logging.getLogger("hjr-bot.main")
+
+# Инициализация Flask
 app = Flask(__name__)
 
-# --- 3. Маршрут для вебхука ---
+# Маршрут для вебхука
 @app.post(WEBHOOK_PATH)
 def process_webhook():
     log.info("Получен входящий запрос на вебхук...")
@@ -45,12 +54,12 @@ def process_webhook():
         log.error(f"Критическая ошибка при обработке вебхука: {e}", exc_info=True)
         return "Webhook processing error", 500
 
-# --- 4. Маршрут для проверки состояния ---
+# Маршрут для проверки состояния
 @app.get("/")
 def health_check():
     return "HJR-Bot is running.", 200
 
-# --- 5. Логика запуска ---
+# Логика запуска
 def startup_tasks():
     log.info("Ожидание 3 секунды для инициализации...")
     time.sleep(3)
@@ -81,6 +90,6 @@ def startup_tasks():
     editor_service.sync_editors_list(bot)
     timer_service.start_timer_check(bot)
 
-# --- 6. Запуск фоновых задач ---
+# Запуск фоновых задач
 startup_thread = Thread(target=startup_tasks, daemon=True)
 startup_thread.start()
