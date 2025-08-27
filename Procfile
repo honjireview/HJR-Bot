@@ -1,1 +1,1 @@
-web: gunicorn --chdir /app -b 0.0.0.0:${PORT:-8080} -w 1 --threads 8 app.main:app
+web: PYTHONPATH=. gunicorn -b 0.0.0.0:${PORT:-8080} -w 1 --threads 8 app.main:app
