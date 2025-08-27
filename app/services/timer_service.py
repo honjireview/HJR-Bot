@@ -18,15 +18,19 @@ def _check_appeals(bot):
         if not active_appeals:
             return
 
-        now = datetime.now(active_appeals[0].get('timer_expires_at').tzinfo)
-
         for appeal in active_appeals:
             case_id = appeal['case_id']
             status = appeal.get('status')
             expires_at = appeal.get('timer_expires_at')
 
+            if not expires_at:
+                continue
+
+            # Устанавливаем таймзону для сравнения
+            now = datetime.now(expires_at.tzinfo)
+
             # --- Проверка 1: Таймер истек ---
-            if expires_at and now > expires_at:
+            if now > expires_at:
                 if status == 'collecting':
                     log.info(f"Таймер сбора контраргументов для дела #{case_id} истек.")
                     appeal_service.finalize_appeal(appeal, bot, COMMIT_HASH, BOT_VERSION)
@@ -38,7 +42,7 @@ def _check_appeals(bot):
                 elif status == 'reviewing':
                     log.info(f"Таймер сбора аргументов для пересмотра дела #{case_id} истек.")
                     appeal_service.finalize_review(appeal, bot, COMMIT_HASH, BOT_VERSION)
-                continue # Переходим к следующей апелляции
+                continue
 
             # --- Проверка 2: Досрочное завершение сбора контраргументов ---
             if status == 'collecting':
@@ -68,7 +72,7 @@ def _handle_review_poll_end(bot, appeal: dict):
     try:
         final_poll = bot.stop_poll(EDITORS_GROUP_ID, poll_message_id)
 
-        total_members = bot.get_chat_member_count(EDITORS_GROUP_ID) - 1 # Вычитаем бота
+        total_members = bot.get_chat_member_count(EDITORS_GROUP_ID) - 1
         inactive_members = editor_repo.count_inactive()
         active_members = total_members - inactive_members
         threshold = active_members / 2
@@ -116,7 +120,7 @@ def start_timer_check(bot):
     def timer_loop():
         while True:
             _check_appeals(bot)
-            time.sleep(60) # Проверять раз в минуту
+            time.sleep(60)
 
     thread = Thread(target=timer_loop, daemon=True)
     thread.start()
