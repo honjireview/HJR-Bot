@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 import logging
 import psycopg
-from core.db import get_connection
+from app.core.db import get_connection
 
 log = logging.getLogger("hjr-bot.repo.editor")
 

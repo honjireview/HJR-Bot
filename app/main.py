@@ -6,37 +6,34 @@ from threading import Thread
 from flask import Flask, request, abort
 import telebot
 
-# --- 1. Настройка и импорты ---
-# Устанавливаем базовую конфигурацию логирования до импорта других модулей
+# --- 1. Настройка и импорты (ИСПРАВЛЕНО НА ОТНОСИТЕЛЬНЫЕ) ---
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 log = logging.getLogger("hjr-bot.main")
 
-from app.core.config import BOT_TOKEN, WEBHOOK_BASE_URL, WEBHOOK_PATH, WEBHOOK_SECRET
-from app.core.bot import bot
-from app.core.db import check_all_connections
-from app.handlers import register_all_handlers
-from app.services import timer_service, editor_service
+from .core.config import BOT_TOKEN, WEBHOOK_BASE_URL, WEBHOOK_PATH, WEBHOOK_SECRET
+from .core.bot import bot
+from .core.db import check_all_connections
+from .handlers import register_all_handlers
+from .services import timer_service, editor_service
 
 # --- 2. Инициализация Flask ---
 app = Flask(__name__)
 
-# --- 3. Маршрут для вебхука (по аналогии с HJR-Scanner) ---
+# --- 3. Маршрут для вебхука ---
 @app.post(WEBHOOK_PATH)
 def process_webhook():
     log.info("Получен входящий запрос на вебхук...")
     try:
-        # Проверка секретного ключа из заголовка
         if WEBHOOK_SECRET:
             secret_token = request.headers.get('X-Telegram-Bot-Api-Secret-Token')
             if secret_token != WEBHOOK_SECRET:
-                log.warning(f"Отклонен запрос с неверным Secret Token: '{secret_token}'")
-                abort(403) # Ошибка "Forbidden"
+                log.warning(f"Отклонен запрос с неверным Secret Token.")
+                abort(403)
             log.info("Secret Token успешно верифицирован.")
 
-        # Проверка типа контента
         if request.headers.get("content-type") == "application/json":
             json_string = request.get_data().decode('utf-8')
             update = telebot.types.Update.de_json(json_string)
@@ -58,20 +55,16 @@ def health_check():
 
 # --- 5. Логика запуска ---
 def startup_tasks():
-    """Выполняет все необходимые действия при старте приложения."""
     log.info("Ожидание 3 секунды для инициализации...")
     time.sleep(3)
 
     if not check_all_connections(bot):
         log.critical("Проверка соединений провалилась. Запуск отменен.")
-        # В production среде это приведет к перезапуску контейнера, что является ожидаемым поведением.
         return
 
-    # Регистрация всех обработчиков команд и FSM
     register_all_handlers(bot)
     log.info("Все обработчики команд успешно зарегистрированы.")
 
-    # Настройка Webhook
     webhook_url = f"{WEBHOOK_BASE_URL.strip('/')}{WEBHOOK_PATH}"
     current_webhook = bot.get_webhook_info()
 
@@ -87,12 +80,9 @@ def startup_tasks():
     else:
         log.info(f"Вебхук уже корректно установлен на: {current_webhook.url}")
 
-    # Запуск фоновых задач
     log.info("Запуск первоначальной синхронизации редакторов...")
     editor_service.sync_editors_list(bot)
     timer_service.start_timer_check(bot)
 
-
-# Запускаем стартовые задачи в отдельном потоке, чтобы не блокировать Gunicorn
-startup_thread = Thread(target=startup_tasks)
+startup_thread = Thread(target=startup_tasks, daemon=True)
 startup_thread.start()

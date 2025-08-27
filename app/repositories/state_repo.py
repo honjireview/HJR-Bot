@@ -1,9 +1,8 @@
 # app/repositories/state_repo.py
 # -*- coding: utf-8 -*-
-# (содержимое этого файла идентично тому, что я прислал в предыдущем ответе)
 import json
 import logging
-from core.db import get_connection
+from ..core.db import get_connection # <-- ИСПРАВЛЕНО
 
 log = logging.getLogger("hjr-bot.repo.state")
 

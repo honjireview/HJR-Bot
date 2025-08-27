@@ -1,11 +1,10 @@
 # app/repositories/appeal_repo.py
 # -*- coding: utf-8 -*-
-# (содержимое этого файла идентично тому, что я прислал в предыдущем ответе)
 import json
 import logging
 import psycopg
 from thefuzz import fuzz
-from core.db import get_connection
+from ..core.db import get_connection # <-- ИСПРАВЛЕНО
 
 log = logging.getLogger("hjr-bot.repo.appeal")
 
