@@ -6,9 +6,9 @@ from datetime import datetime, timedelta
 from threading import Thread
 
 # ИСПРАВЛЕНО
-from ..core.config import COMMIT_HASH, BOT_VERSION, EDITORS_GROUP_ID
-from ..repositories import appeal_repo, editor_repo
-from . import appeal_service
+from ..core.config import COMMIT_HASH, BOT_VERSION, EDITORS_GROUP_ID # Относительный импорт
+from ..repositories import appeal_repo, editor_repo # Относительный импорт
+from . import appeal_service # Относительный импорт
 
 log = logging.getLogger("hjr-bot.service.timer")
 
