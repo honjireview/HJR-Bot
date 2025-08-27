@@ -3,8 +3,8 @@
 import logging
 import time
 from app.repositories import appeal_repo
-from core.config import GEMINI_API_KEY
-from core.precedents import PRECEDENTS
+from app.core.config import GEMINI_API_KEY
+from app.core.precedents import PRECEDENTS
 
 # ИСПРАВЛЕНО
 from ..core.config import COMMIT_HASH, BOT_VERSION, EDITORS_GROUP_ID # Относительный импорт

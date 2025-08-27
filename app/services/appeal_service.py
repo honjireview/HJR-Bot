@@ -5,8 +5,8 @@ import re
 from datetime import datetime
 from app.repositories import appeal_repo
 from app.services import gemini_service
-from utils.telegraph_helpers import post_to_telegraph, markdown_to_html
-from core.config import APPEALS_CHANNEL_ID
+from app.utils.telegraph_helpers import post_to_telegraph, markdown_to_html
+from app.core.config import APPEALS_CHANNEL_ID
 
 log = logging.getLogger("hjr-bot.service.appeal")
 
