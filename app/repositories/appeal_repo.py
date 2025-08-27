@@ -4,7 +4,7 @@ import json
 import logging
 import psycopg
 from thefuzz import fuzz
-from ..core.db import get_connection # <-- ИСПРАВЛЕНО
+from app.repositories import state_repo
 
 log = logging.getLogger("hjr-bot.repo.appeal")
 

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-from ..repositories import state_repo, appeal_repo # Относительный импорт
-from . import admin, appeal, tools # Относительный импорт
+from app.repositories import state_repo, appeal_repo
+from . import admin, appeal, tools
 
 def register_all_handlers(bot):
     """Регистрирует все обработчики из всех модулей."""

@@ -7,8 +7,8 @@ from telebot import types
 
 from app.services import appeal_service, editor_service
 from app.repositories import state_repo, appeal_repo
-from app.utils.telegram_helpers import validate_appeal_link
-from app.utils.council_helpers import request_counter_arguments
+from utils.telegram_helpers import validate_appeal_link
+from utils.council_helpers import request_counter_arguments
 
 log = logging.getLogger("hjr-bot.handlers.appeal")
 

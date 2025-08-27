@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 import json
 import logging
-from ..core.db import get_connection # <-- ИСПРАВЛЕНО
+from core.db import get_connection
 
 log = logging.getLogger("hjr-bot.repo.state")
 

@@ -4,8 +4,8 @@ import logging
 import google.generativeai as genai
 from datetime import datetime
 from app.repositories import appeal_repo
-from app.core.config import GEMINI_API_KEY
-from app.core.precedents import PRECEDENTS
+from core.config import GEMINI_API_KEY
+from core.precedents import PRECEDENTS
 
 log = logging.getLogger("hjr-bot.service.gemini")
 
